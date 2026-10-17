@@ -9,6 +9,7 @@ import '../models/consultation_question.dart';
 import '../models/medication_inventory.dart';
 import '../services/storage_service.dart';
 import '../services/image_storage_service.dart';
+import '../services/medical_metric_service.dart';
 
 class MetricHistoryPoint {
   final DateTime date;
@@ -26,6 +27,7 @@ class MetricHistoryPoint {
   final String diseaseName;
   final bool isQualitative;
   final String qualitativeChange;
+  final String originalItemName; // 原始化验单指标名称
 
   MetricHistoryPoint({
     required this.date,
@@ -43,6 +45,7 @@ class MetricHistoryPoint {
     this.diseaseName = '',
     this.isQualitative = false,
     this.qualitativeChange = '',
+    this.originalItemName = '',
   });
 }
 
@@ -410,30 +413,35 @@ class RecordsProvider with ChangeNotifier {
   }
 
   List<String> getAllItemNames() {
-    // 1. 统计每个 itemName 在所有复查单据中出现的栏目分类
-    final Map<String, Set<String>> nameToCategories = {};
+    // 1. 统计每个指标在所有复查单据中出现的规范化栏目分类与标准医学名称
+    final Map<String, Set<String>> canonicalNameToCategories = {};
     for (var r in _records) {
+      final rawRecCat = r.category.trim();
+      final normRecCat = MedicalMetricService.instance.normalizeCategory(rawRecCat);
+
       for (var it in r.items) {
-        final name = it.itemName.trim();
-        if (name.isEmpty) continue;
-        final cat = it.category.trim().isNotEmpty
-            ? it.category.trim()
-            : (r.category.trim().isNotEmpty ? r.category.trim() : '常规检验');
-        nameToCategories.putIfAbsent(name, () => {}).add(cat);
+        final rawName = it.itemName.trim();
+        if (rawName.isEmpty) continue;
+
+        final rawItemCat = it.category.trim().isNotEmpty ? it.category.trim() : rawRecCat;
+        final normItemCat = MedicalMetricService.instance.normalizeCategory(rawItemCat);
+
+        // 智能获取权威标准显示名 (如将 WBC/白细胞 统一定位为 白细胞计数 (WBC))
+        final stdName = MedicalMetricService.instance.getStandardDisplayName(rawName, category: normItemCat);
+        canonicalNameToCategories.putIfAbsent(stdName, () => {}).add(normItemCat);
       }
     }
 
     final Set<String> names = {};
-    for (var entry in nameToCategories.entries) {
+    for (var entry in canonicalNameToCategories.entries) {
       final name = entry.key;
       final cats = entry.value;
       if (cats.length > 1) {
-        // 🌟 核心：不同单据栏目的同名检查项（如尿常规白细胞 vs 血常规白细胞），加单据前缀区分开！
+        // 跨不同大类的同名指标（如尿常规 vs 血常规），带上收敛后的规范大类前缀
         for (var cat in cats) {
           names.add('[$cat] $name');
         }
       } else {
-        // 独有指标：未跨栏目重名，保持原指标名称
         names.add(name);
       }
     }
@@ -450,7 +458,7 @@ class RecordsProvider with ChangeNotifier {
     final List<MetricHistoryPoint> rawPoints = [];
     final target = itemName.trim();
 
-    // 🌟 解析单据前缀：例如 [血常规] 白细胞 或 [尿常规] 白细胞
+    // 🌟 1. 解析单据前缀：例如 [血常规] 白细胞计数 (WBC)
     String? filterCategory;
     String cleanItemName = target;
     if (target.startsWith('[') && target.contains(']')) {
@@ -460,17 +468,38 @@ class RecordsProvider with ChangeNotifier {
     }
     final targetNameLower = cleanItemName.toLowerCase();
 
+    // 🌟 2. 获取该目标指标的所有同义词、别名与中英文缩写集合 (例如 WBC、白细胞、白细胞计数、leukocyte 等)
+    final synonyms = MedicalMetricService.instance.getMetricSynonyms(
+      cleanItemName,
+      category: filterCategory,
+    );
+
     for (var r in _records) {
       final dis = getDiseaseById(r.diseaseId);
-      for (var it in r.items) {
-        if (it.itemName.trim().toLowerCase() != targetNameLower) continue;
+      final rawRecCat = r.category.trim();
 
-        // 若指定了单据分类前缀，则严格匹配所属单据分类，彻底区分不同报告单同名指标
+      for (var it in r.items) {
+        final rawItemName = it.itemName.trim();
+        final rawItemNameLower = rawItemName.toLowerCase();
+        final rawItemCat = it.category.trim().isNotEmpty ? it.category.trim() : rawRecCat;
+        final normItemCat = MedicalMetricService.instance.normalizeCategory(rawItemCat).toLowerCase();
+
+        // 🌟 3. 核心智能判定：字面匹配 OR 命中医学同义词库 OR 规范名一致
+        bool isMatch = (rawItemNameLower == targetNameLower) || synonyms.contains(rawItemNameLower);
+        if (!isMatch) {
+          final itStandard = MedicalMetricService.instance.findStandardMetric(rawItemName, category: normItemCat);
+          if (itStandard != null && synonyms.contains(itStandard.standardName.toLowerCase())) {
+            isMatch = true;
+          }
+        }
+
+        if (!isMatch) continue;
+
+        // 若指定了单据分类前缀，则严格比对规范化后的单据分类
         if (filterCategory != null && filterCategory.isNotEmpty) {
-          final itemCat = (it.category.trim().isNotEmpty
-              ? it.category.trim()
-              : (r.category.trim().isNotEmpty ? r.category.trim() : '常规检验')).toLowerCase();
-          if (itemCat != filterCategory && !itemCat.contains(filterCategory) && !filterCategory.contains(itemCat)) {
+          if (normItemCat != filterCategory &&
+              !normItemCat.contains(filterCategory) &&
+              !filterCategory.contains(normItemCat)) {
             continue;
           }
         }
@@ -520,6 +549,7 @@ class RecordsProvider with ChangeNotifier {
           parentCategory: it.category.isNotEmpty ? it.category : (r.category.isNotEmpty ? r.category : '常规化验单'),
           diseaseName: dis?.name ?? '',
           isQualitative: isQualitative,
+          originalItemName: it.itemName,
         ));
       }
     }
@@ -876,6 +906,72 @@ class RecordsProvider with ChangeNotifier {
       await StorageService.instance.saveMedicationInventory(cur);
       notifyListeners();
     }
+  }
+
+  // =========================================================================
+  // --- 🧬 智能指标归一化与全量历史数据对齐 ---
+  // =========================================================================
+
+  /// 扫描全库所有化验单，使用本地医学知识图谱 + AI 批量归一化所有指标名称与单据分类
+  Future<int> batchStandardizeRecordsWithAi(dynamic settings) async {
+    // 1. 提取所有已录入的不同指标名称
+    final Set<String> allDistinctNames = {};
+    for (var r in _records) {
+      for (var it in r.items) {
+        if (it.itemName.trim().isNotEmpty) {
+          allDistinctNames.add(it.itemName.trim());
+        }
+      }
+    }
+
+    if (allDistinctNames.isEmpty) return 0;
+
+    // 2. 调用 MedicalMetricService 生成全量归一化映射表
+    final nameMapping = await MedicalMetricService.instance.aiClassifyAndStandardizeItemNames(
+      distinctNames: allDistinctNames.toList(),
+      settings: settings,
+    );
+
+    int modifiedCount = 0;
+    for (var r in _records) {
+      bool recordChanged = false;
+
+      // 规范化单据大类 (如 "全血细胞分析" -> "血常规")
+      final oldCat = r.category.trim();
+      final newCat = MedicalMetricService.instance.normalizeCategory(oldCat);
+      if (oldCat != newCat) {
+        r.category = newCat;
+        recordChanged = true;
+      }
+
+      // 规范化内部每个指标条目 (如 "WBC" -> "白细胞计数 (WBC)")
+      for (var it in r.items) {
+        final rawName = it.itemName.trim();
+        final mapped = nameMapping[rawName];
+        if (mapped != null && mapped.isNotEmpty && mapped != rawName) {
+          it.itemName = mapped;
+          recordChanged = true;
+        }
+
+        // 同步规范化 item 自身的 category
+        final oldItemCat = it.category.trim();
+        final newItemCat = MedicalMetricService.instance.normalizeCategory(oldItemCat.isNotEmpty ? oldItemCat : newCat);
+        if (oldItemCat != newItemCat) {
+          it.category = newItemCat;
+          recordChanged = true;
+        }
+      }
+
+      if (recordChanged) {
+        await StorageService.instance.updateRecord(r);
+        modifiedCount++;
+      }
+    }
+
+    if (modifiedCount > 0) {
+      await loadData();
+    }
+    return modifiedCount;
   }
 }
 

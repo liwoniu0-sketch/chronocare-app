@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../providers/records_provider.dart';
+import '../providers/settings_provider.dart';
+import '../services/medical_metric_service.dart';
 import 'record_detail_screen.dart';
 
 class MetricsTrendTab extends StatefulWidget {
@@ -25,8 +27,9 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchKeyword = '';
   bool _hasAppliedInitialItem = false;
+  bool _isStandardizing = false;
 
-  /// 🌟 结合当前单据栏目与指标名称的 4 级多维智能精准解析定位算法
+  /// 🌟 结合当前单据栏目与权威医学知识库的 5 级智能精准定位算法
   String? _resolveTargetItemName(
     List<String> allItems,
     String? targetName,
@@ -36,7 +39,7 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
     final cleanTarget = targetName.trim();
     final cleanCategory = (targetCategory ?? '').trim();
 
-    // 0. 直接完全命中（如直接传入 "[血常规] 白细胞" 或未重名独有指标 "空腹血糖"）
+    // 0. 直接完全命中（如直接传入 "[血常规] 白细胞计数 (WBC)" 或未重名指标）
     if (allItems.contains(cleanTarget)) {
       return cleanTarget;
     }
@@ -50,25 +53,41 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
       pureName = cleanTarget.substring(closeIdx + 1).trim();
     }
     final effectiveCategory = cleanCategory.isNotEmpty ? cleanCategory : (embeddedCat ?? '');
+    final normCategory = MedicalMetricService.instance.normalizeCategory(effectiveCategory);
 
-    // 1. 最高优先级：结合当前单据栏目分类精确匹配 "[$effectiveCategory] $pureName"
-    if (effectiveCategory.isNotEmpty) {
-      final exactWithCat = '[$effectiveCategory] $pureName';
-      if (allItems.contains(exactWithCat)) {
-        return exactWithCat;
-      }
+    // 🌟 1. 利用标准医学字典反查标准名 (例如传入 WBC/白细胞 -> 标准名 白细胞计数 (WBC))
+    final canonical = MedicalMetricService.instance.findStandardMetric(pureName, category: normCategory);
+    final standardDisplayName = canonical?.standardName ?? '';
+
+    // 1.1 如果有标准显示名，优先在当前单据大类中匹配 "[$normCategory] $standardDisplayName"
+    if (standardDisplayName.isNotEmpty) {
+      final stdWithCat = '[$normCategory] $standardDisplayName';
       for (final item in allItems) {
-        if (item.toLowerCase() == exactWithCat.toLowerCase()) {
-          return item;
-        }
+        if (item.toLowerCase() == stdWithCat.toLowerCase()) return item;
       }
-      // 容错匹配：单据分类名称包含（例如 "血常规" 与 "血常规检验"）
+      // 1.2 在无分类的条目中匹配 "$standardDisplayName"
+      for (final item in allItems) {
+        if (item.toLowerCase() == standardDisplayName.toLowerCase()) return item;
+      }
+      // 1.3 在所有项中寻找包含标准名的项
+      for (final item in allItems) {
+        if (item.toLowerCase().contains(standardDisplayName.toLowerCase())) return item;
+      }
+    }
+
+    // 2. 结合单据分类精确匹配 "[$normCategory] $pureName"
+    if (normCategory.isNotEmpty) {
+      final exactWithCat = '[$normCategory] $pureName';
+      for (final item in allItems) {
+        if (item.toLowerCase() == exactWithCat.toLowerCase()) return item;
+      }
+      // 容错匹配：单据分类包含
       for (final item in allItems) {
         if (item.startsWith('[') && item.contains(']')) {
           final closeIdx = item.indexOf(']');
           final cat = item.substring(1, closeIdx).trim().toLowerCase();
           final name = item.substring(closeIdx + 1).trim().toLowerCase();
-          final effLower = effectiveCategory.toLowerCase();
+          final effLower = normCategory.toLowerCase();
           if (name == pureName.toLowerCase() && (cat.contains(effLower) || effLower.contains(cat))) {
             return item;
           }
@@ -76,35 +95,90 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
       }
     }
 
-    // 2. 次高优先级：纯指标名称精确匹配（针对未跨单据重名的独有指标，如 "总胆固醇"、"促甲状腺激素"）
-    if (allItems.contains(pureName)) {
-      return pureName;
-    }
+    // 3. 纯指标名称精确匹配
+    if (allItems.contains(pureName)) return pureName;
     for (final item in allItems) {
-      if (item.toLowerCase() == pureName.toLowerCase()) {
-        return item;
-      }
+      if (item.toLowerCase() == pureName.toLowerCase()) return item;
     }
 
-    // 3. 第三优先级：跨单据重名但分类未完全匹配时，在所有带单据前缀的项中匹配同名指标 "[$anyCat] $pureName"
+    // 4. 在带前缀的项中匹配纯指标名
     for (final item in allItems) {
       if (item.startsWith('[') && item.contains(']')) {
         final closeIdx = item.indexOf(']');
         final name = item.substring(closeIdx + 1).trim().toLowerCase();
-        if (name == pureName.toLowerCase()) {
-          return item;
-        }
+        if (name == pureName.toLowerCase()) return item;
       }
     }
 
-    // 4. 第四优先级：模糊包含纯指标名称
+    // 5. 模糊包含纯指标名称
     for (final item in allItems) {
-      if (item.toLowerCase().contains(pureName.toLowerCase())) {
-        return item;
-      }
+      if (item.toLowerCase().contains(pureName.toLowerCase())) return item;
     }
 
     return null;
+  }
+
+  Future<void> _runAiStandardization(BuildContext context) async {
+    final prov = Provider.of<RecordsProvider>(context, listen: false);
+    final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.auto_awesome, color: Colors.blueAccent),
+            SizedBox(width: 8),
+            Text('智能指标归拢与标准化'),
+          ],
+        ),
+        content: const Text(
+          '系统将利用权威医学知识库与智能引擎，扫描并整理所有历史化验单：\n\n'
+          '1. 将中英文缩写与同义别名统一（如 WBC / 白细胞 统一为 白细胞计数 (WBC)）；\n'
+          '2. 将微小差异的单据名称收敛至规范大类（如“全血细胞分析”统一为“血常规”）；\n'
+          '3. 消除原本分散的同类指标，彻底拼接为连续完整的走势折线图。\n\n'
+          '是否立即执行规范化整理？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            child: const Text('立即规范化', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isStandardizing = true);
+    try {
+      final modifiedCount = await prov.batchStandardizeRecordsWithAi(settings);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('🎉 智能归拢完成！已规范并收敛 $modifiedCount 张单据的历史指标，走势已无缝合并！'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('归拢整理遇到异常: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isStandardizing = false);
+    }
   }
 
   @override
@@ -231,6 +305,50 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 🌟 智能指标归拢整理入口
+            Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF334155) : const Color(0xFFBBF7D0),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome, color: Colors.teal, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '同名/同义指标分散了？点击一键智能归拢合并历史走势',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : const Color(0xFF166534),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _isStandardizing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : TextButton(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: () => _runAiStandardization(context),
+                          child: const Text('立即归拢', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.teal)),
+                        ),
+                ],
+              ),
+            ),
+
             // 1. 关键词即时搜索单独项目
             Card(
               elevation: 2,
@@ -386,6 +504,37 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                           ),
                         ],
                       ),
+                      () {
+                        final distinctOriginalNames = history.map((h) => h.originalItemName).where((n) => n.isNotEmpty).toSet();
+                        if (distinctOriginalNames.length > 1) {
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6, bottom: 2),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.link, size: 12, color: Colors.blue),
+                                  const SizedBox(width: 4),
+                                  Flexible(
+                                    child: Text(
+                                      '已智能聚合跨期记录：${distinctOriginalNames.join("、")}',
+                                      style: const TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.bold),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      }(),
                       const SizedBox(height: 8),
                       Row(
                         children: [
@@ -537,6 +686,20 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                                   Text(
                                     '参考: $standardRefRange',
                                     style: TextStyle(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : Colors.grey.shade600),
+                                  ),
+                                if (item.originalItemName.isNotEmpty &&
+                                    item.originalItemName.trim().toLowerCase() != _selectedItemName?.trim().toLowerCase())
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.purple.withOpacity(0.08),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(color: Colors.purple.withOpacity(0.25)),
+                                    ),
+                                    child: Text(
+                                      '原单: ${item.originalItemName}',
+                                      style: const TextStyle(fontSize: 10, color: Colors.purple, fontWeight: FontWeight.bold),
+                                    ),
                                   ),
                               ],
                             ),

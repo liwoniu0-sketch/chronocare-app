@@ -5,6 +5,7 @@ import '../models/check_item.dart';
 import '../models/medication.dart';
 import '../models/app_settings.dart';
 import '../models/medication_inventory.dart';
+import 'medical_metric_service.dart';
 
 class AiAnalysisResult {
   final DateTime? checkDate;
@@ -59,8 +60,13 @@ class AiService {
 4. 阴性与定性指标全量保留：如尿常规中的尿蛋白(阴性)、尿糖(-)、潜血(-)等必须全部提取为完整项！
 
 【🚨 核心栏目归类硬性规则（绝对禁止拆分过细）】：
-1. 一张化验单必须且只能提取为一个统一的顶级单据大类名称（category），例如："血常规"、"血液生化全项"、"肝肾功能"、"尿液分析"、"凝血功能"、"甲状腺功能"、"超声影像报告" 等。
+1. 一张化验单必须且只能提取为一个统一的标准顶级单据大类名称（category），必须收敛为标准分类，如："血常规"、"生化全套"、"肝功能"、"肾功能"、"血脂全套"、"尿常规"、"凝血功能"、"甲状腺功能"、"肿瘤标志物"、"电解质" 等，严禁随意添加“报告单/检验/分析”等冗余后缀。
 2. 严禁把同一张化验单上的指标拆分成多个不同的小栏目！同一张单据上的所有检测指标（如生化单上的白蛋白、转氨酶、肌酐、尿酸、血糖、血脂）其 category 必须全部统一命名为该整张化验单的顶级大类名称！
+
+【🚨 核心检验指标名称权威标准化与防拆分硬性铁律（重中之重）】：
+1. 规范权威命名：指标名称（itemName）必须统一规范化为权威医学通用中文全称，并尽量附注国际标准英文缩写（例如："白细胞计数 (WBC)"、"血小板计数 (PLT)"、"红细胞计数 (RBC)"、"血红蛋白 (HGB)"、"空腹血糖 (GLU)"、"糖化血红蛋白 (HbA1c)"、"丙氨酸氨基转移酶 (ALT)"、"天门冬氨酸氨基转移酶 (AST)"、"血肌酐 (Cr)"、"尿素氮 (BUN)"、"血尿酸 (UA)"、"甘油三酯 (TG)"、"总胆固醇 (TC)"、"高密度脂蛋白胆固醇 (HDL-C)"、"低密度脂蛋白胆固醇 (LDL-C)"、"促甲状腺激素 (TSH)" 等）；
+2. 彻底消除同名指标分裂：严禁将同一种指标因医院不同简写（如有的单据写WBC、有的写白细胞数、有的写白细胞）提取为不同的名称，一律归一化输出为上述标准规范格式！
+3. 尿常规指标区分：尿常规检验中的白细胞、红细胞、蛋白质等，必须加上“尿”前缀（如"尿白细胞 (LEU)"、"尿潜血 (BLD)"、"尿蛋白 (PRO)"），防止与血常规混淆。
 
 【🚨 开单日期提取权重硬性规则】：
 1. 第一优先级：提取医生【开单日期 / 申请日期 / 采样抽血日期 / 就诊日期】；
@@ -230,19 +236,25 @@ $medsSummary
         checkDate = DateTime.tryParse(map['checkDate'].toString());
       }
 
-      final singleMainCategory = map['category']?.toString().trim() ?? '常规化验';
+      final rawMainCategory = map['category']?.toString().trim() ?? '常规化验';
+      final singleMainCategory = MedicalMetricService.instance.normalizeCategory(rawMainCategory);
 
       List<CheckItem> items = [];
       if (map['items'] != null && map['items'] is List) {
         for (var i in map['items']) {
+          final rawItemName = i['itemName']?.toString().trim() ?? '';
+          final standardName = MedicalMetricService.instance.getStandardDisplayName(
+            rawItemName,
+            category: singleMainCategory,
+          );
           items.add(CheckItem(
             id: DateTime.now().microsecondsSinceEpoch.toString() + '_' + items.length.toString(),
-            itemName: i['itemName']?.toString() ?? '',
+            itemName: standardName.isNotEmpty ? standardName : rawItemName,
             value: i['value']?.toString() ?? '',
             unit: i['unit']?.toString() ?? '',
             referenceRange: i['referenceRange']?.toString() ?? '',
             status: i['status']?.toString() ?? 'normal',
-            // 确保单张化验单上的所有指标统归属于该单据的大类名称，拒绝碎片化细分
+            // 确保单张化验单上的所有指标统归属于该单据的标准大类名称，拒绝碎片化细分
             category: singleMainCategory,
             sourceImagePath: imagePath,
             notes: i['notes']?.toString() ?? '',
@@ -314,8 +326,9 @@ $medsSummary
 1. 必须逐行提取文本中出现的所有检测指标，无论其结果是正常、偏高、偏低、阳性还是阴性，绝不能遗漏任何一项！
 2. 绝对严禁只提取异常指标！绝不合并或省略任何指标！
 3. 开单日期：第一优先级提取【开单日期/采样日期/就诊日期】，格式 YYYY-MM-DD。
-4. 化验单大类名称（category）：根据指标内容准确归类，如"血常规"、"尿常规"、"血液生化全套"、"肝肾功能"、"凝血功能"、"甲状腺功能"等。
-5. 状态判断：normal(正常) | high(偏高) | low(偏低) | abnormal(异常/阳性)。
+4. 化验单标准顶级大类（category）：必须收敛为标准分类，如"血常规"、"尿常规"、"生化全套"、"肝功能"、"肾功能"、"血脂全套"、"凝血功能"、"甲状腺功能"等，严禁随意带“报告单/分析/单”等后缀。
+5. 检验指标名称权威标准化（itemName）：必须统一规范化为权威医学通用中文全称并尽量附注英文缩写（如"白细胞计数 (WBC)"、"血小板计数 (PLT)"、"红细胞计数 (RBC)"、"空腹血糖 (GLU)"、"糖化血红蛋白 (HbA1c)"、"丙氨酸氨基转移酶 (ALT)"、"血肌酐 (Cr)"、"尿素氮 (BUN)" 等），彻底杜绝由于简写差异导致的同种指标被切开分裂！尿常规指标必须附带“尿”字区分（如"尿白细胞 (LEU)"）。
+6. 状态判断：normal(正常) | high(偏高) | low(偏低) | abnormal(异常/阳性)。
 
 请严格返回如下 JSON 格式（不要输出 markdown 代码块外的内容）：
 {
