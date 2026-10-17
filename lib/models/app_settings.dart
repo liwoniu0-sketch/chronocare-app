@@ -50,6 +50,12 @@ class AppSettings {
   bool syncEncryptBackup; // 上传备份时是否加密
   String syncEncryptKey;
 
+  // --- Cloudflare 专属云同步配置 (双保险) ---
+  bool cloudflareSyncEnabled;
+  String cloudflareSyncUrl;
+  String cloudflareSyncToken;
+  bool dualCloudSyncEnabled; // 是否同时备份到 WebDAV 和 Cloudflare
+
   // --- UI 与外观偏好 ---
   String themeMode; // 'system', 'light', 'dark'
   String primaryColorHex; // 主题色 如 #2563EB
@@ -103,6 +109,10 @@ class AppSettings {
     this.syncWifiOnlyForImages = true,
     this.syncEncryptBackup = false,
     this.syncEncryptKey = '',
+    this.cloudflareSyncEnabled = true,
+    this.cloudflareSyncUrl = 'https://chrono.lz1861.ccwu.cc',
+    this.cloudflareSyncToken = 'chrono_secure_sync_2025',
+    this.dualCloudSyncEnabled = true,
     this.themeMode = 'system',
     this.primaryColorHex = '#2563EB',
     this.compactCardMode = false,
@@ -153,6 +163,10 @@ class AppSettings {
       'syncWifiOnlyForImages': syncWifiOnlyForImages,
       'syncEncryptBackup': syncEncryptBackup,
       'syncEncryptKey': syncEncryptKey,
+      'cloudflareSyncEnabled': cloudflareSyncEnabled,
+      'cloudflareSyncUrl': cloudflareSyncUrl,
+      'cloudflareSyncToken': cloudflareSyncToken,
+      'dualCloudSyncEnabled': dualCloudSyncEnabled,
       'themeMode': themeMode,
       'primaryColorHex': primaryColorHex,
       'compactCardMode': compactCardMode,
@@ -214,6 +228,10 @@ class AppSettings {
       syncWifiOnlyForImages: map['syncWifiOnlyForImages'] ?? true,
       syncEncryptBackup: map['syncEncryptBackup'] ?? false,
       syncEncryptKey: map['syncEncryptKey'] ?? '',
+      cloudflareSyncEnabled: map['cloudflareSyncEnabled'] ?? true,
+      cloudflareSyncUrl: map['cloudflareSyncUrl'] ?? 'https://chrono.lz1861.ccwu.cc',
+      cloudflareSyncToken: map['cloudflareSyncToken'] ?? 'chrono_secure_sync_2025',
+      dualCloudSyncEnabled: map['dualCloudSyncEnabled'] ?? true,
       themeMode: map['themeMode'] ?? 'system',
       primaryColorHex: map['primaryColorHex'] ?? '#2563EB',
       compactCardMode: map['compactCardMode'] ?? false,

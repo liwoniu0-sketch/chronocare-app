@@ -6,6 +6,7 @@ import 'package:open_filex/open_filex.dart';
 import '../providers/settings_provider.dart';
 import '../providers/records_provider.dart';
 import '../services/webdav_service.dart';
+import '../services/cloudflare_sync_service.dart';
 import '../services/backup_service.dart';
 import '../services/update_service.dart';
 import 'advanced_settings_screen.dart';
@@ -23,9 +24,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _webdavPassCtrl;
   late TextEditingController _webdavDirCtrl;
 
+  late TextEditingController _cfUrlCtrl;
+  late TextEditingController _cfTokenCtrl;
+
   bool _isTestingWebdav = false;
   bool _isSyncing = false;
   bool _isDownloadingWebdav = false;
+
+  bool _isTestingCf = false;
+  bool _isSyncingCf = false;
+  bool _isDownloadingCf = false;
+  bool _isDualSyncing = false;
+  String _syncProgressText = '';
+
   bool _isCheckingUpdate = false;
   double _downloadProgress = 0.0;
   bool _isDownloadingApk = false;
@@ -38,6 +49,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUserCtrl = TextEditingController(text: s.webdavUsername);
     _webdavPassCtrl = TextEditingController(text: s.webdavPassword);
     _webdavDirCtrl = TextEditingController(text: s.webdavRemoteDir);
+
+    _cfUrlCtrl = TextEditingController(text: s.cloudflareSyncUrl);
+    _cfTokenCtrl = TextEditingController(text: s.cloudflareSyncToken);
   }
 
   @override
@@ -46,6 +60,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _webdavUserCtrl.dispose();
     _webdavPassCtrl.dispose();
     _webdavDirCtrl.dispose();
+    _cfUrlCtrl.dispose();
+    _cfTokenCtrl.dispose();
     super.dispose();
   }
 
@@ -187,9 +203,170 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
 
-          // 2. WebDAV 云同步配置与自动同步时间设置
-          const Text('☁️ WebDAV 云端全量同步与定时策略', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+          // 实时同步进度卡片
+          if (_syncProgressText.isNotEmpty) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _syncProgressText,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.blueAccent),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // 2. 双云双轨双保险全量同步
+          const Text('🛡️ 多云双保险备份 (Cloudflare + WebDAV)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
+
+          // 2.0 双轨一键同步大卡片 (极客双保险)
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            color: isDark ? Colors.blueGrey.shade900 : Colors.blue.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.security, color: Colors.indigoAccent),
+                      const SizedBox(width: 8),
+                      const Text('全球双轨灾备', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.indigoAccent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text('推荐启用', style: TextStyle(fontSize: 11, color: Colors.indigoAccent, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '支持将所有检验指标、就诊用药、备忘及每一张化验单高清原图，同时双写备份至 Cloudflare 专属存储与 WebDAV 云盘。新手机无论何时一键导入，都能 100% 完美复原！',
+                    style: TextStyle(fontSize: 12, height: 1.4, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 40,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.indigoAccent,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: _isDualSyncing
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.cloud_sync, color: Colors.white, size: 18),
+                      label: Text(
+                        _isDualSyncing ? '正在双轨异地同步中...' : '一键双云全量备份 (Cloudflare + WebDAV)',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      onPressed: _isDualSyncing || _isSyncingCf || _isSyncing ? null : () => _dualSyncNow(s, prov, recordsProv),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 2.1 Cloudflare 专属全量云备份 (免绑卡 / 专有高可用)
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    title: const Text('⚡ Cloudflare 专属永久云备份', style: TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: const Text('一键备份全量指标与化验单高清原图，换新手机一键镜像复原'),
+                    value: s.cloudflareSyncEnabled,
+                    onChanged: (val) {
+                      s.cloudflareSyncEnabled = val;
+                      prov.updateSettings(s);
+                    },
+                  ),
+                  if (s.cloudflareSyncEnabled) ...[
+                    const Divider(height: 1),
+                    TextField(
+                      controller: _cfUrlCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Cloudflare 专属同步节点',
+                        hintText: 'https://chrono.lz1861.ccwu.cc',
+                        border: InputBorder.none,
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    TextField(
+                      controller: _cfTokenCtrl,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: '安全同步密钥 (Token)',
+                        hintText: '专属高防密钥已自动预设',
+                        border: InputBorder.none,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _isTestingCf ? null : () => _testCloudflare(s),
+                            child: _isTestingCf
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Text('测试连通'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                            icon: const Icon(Icons.cloud_upload, size: 16, color: Colors.white),
+                            label: _isSyncingCf
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Text('全量上传', style: TextStyle(color: Colors.white)),
+                            onPressed: _isSyncingCf ? null : () => _syncToCloudflare(s),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+                            icon: const Icon(Icons.cloud_download, size: 16, color: Colors.white),
+                            label: _isDownloadingCf
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Text('新机一键还原', style: TextStyle(color: Colors.white)),
+                            onPressed: _isDownloadingCf ? null : () => _pullFromCloudflare(s, prov, recordsProv),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 2.2 WebDAV 云端全量同步与定时策略
           Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
@@ -197,7 +374,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 children: [
                   SwitchListTile(
-                    title: const Text('启用 WebDAV 自动同步', style: TextStyle(fontWeight: FontWeight.bold)),
+                    title: const Text('☁️ 坚果云 / WebDAV 自动同步', style: TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: const Text('支持坚果云、Nextcloud、群晖 NAS 等 (同步全部图片与配置)'),
                     value: s.webdavEnabled,
                     onChanged: (val) {
@@ -445,6 +622,145 @@ class _SettingsScreenState extends State<SettingsScreen> {
           backgroundColor: ok ? Colors.green : Colors.red,
         ),
       );
+    }
+  }
+
+  void _saveCloudFields(s) {
+    _saveWebdavFields(s);
+    s.cloudflareSyncUrl = _cfUrlCtrl.text.trim();
+    s.cloudflareSyncToken = _cfTokenCtrl.text.trim();
+  }
+
+  Future<void> _testCloudflare(s) async {
+    _saveCloudFields(s);
+    setState(() => _isTestingCf = true);
+    final res = await CloudflareSyncService.instance.testConnection(s);
+    setState(() => _isTestingCf = false);
+
+    if (mounted) {
+      final success = res['success'] == true && res['authenticated'] == true;
+      final msg = res['message'] ?? (success ? '连接成功！' : '连接失败');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '✅ Cloudflare 专属节点测试成功: $msg' : '❌ Cloudflare 测试失败: $msg'),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _syncToCloudflare(s) async {
+    _saveCloudFields(s);
+    setState(() {
+      _isSyncingCf = true;
+      _syncProgressText = '正在连接 Cloudflare 云端节点...';
+    });
+    try {
+      await CloudflareSyncService.instance.uploadAllToCloudflare(
+        s,
+        onProgress: (step, prog) {
+          if (mounted) setState(() => _syncProgressText = step);
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('🎉 全部数字指标、化验单原图与设置已 100% 备份至 Cloudflare！'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Cloudflare 备份失败: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncingCf = false;
+          _syncProgressText = '';
+        });
+      }
+    }
+  }
+
+  Future<void> _pullFromCloudflare(s, SettingsProvider prov, RecordsProvider recordsProv) async {
+    _saveCloudFields(s);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('从 Cloudflare 恢复数据'),
+        content: const Text('将从 Cloudflare 下载全部档案、配置，并自动补全下载所有化验单高清原图，还原为与旧手机 100% 一模一样。\n\n确认现在执行恢复吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认全量恢复', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() {
+      _isDownloadingCf = true;
+      _syncProgressText = '正在从 Cloudflare 检索备份数据...';
+    });
+    try {
+      await CloudflareSyncService.instance.restoreAllFromCloudflare(
+        s,
+        onProgress: (step, prog) {
+          if (mounted) setState(() => _syncProgressText = step);
+        },
+      );
+      await prov.loadSettings();
+      await recordsProv.loadData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('🎉 恢复成功！化验单原图与全部档案已 100% 还原！'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('云端恢复失败: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloadingCf = false;
+          _syncProgressText = '';
+        });
+      }
+    }
+  }
+
+  Future<void> _dualSyncNow(s, SettingsProvider prov, RecordsProvider recordsProv) async {
+    _saveCloudFields(s);
+    setState(() {
+      _isDualSyncing = true;
+      _syncProgressText = '正在启动双云双轨异地同步...';
+    });
+    try {
+      await CloudflareSyncService.instance.dualCloudBackup(
+        s,
+        onProgress: (step, prog) {
+          if (mounted) setState(() => _syncProgressText = step);
+        },
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('🛡️ 双云双轨同步完成！Cloudflare 与 WebDAV 双保险落盘成功！'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('双轨同步失败: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDualSyncing = false;
+          _syncProgressText = '';
+        });
+      }
     }
   }
 
