@@ -12,7 +12,7 @@ class AiAnalysisResult {
   final String hospital;
   final String department;
   final String doctorName;
-  final String category; // 顶级检查单据大类名称
+  String category; // 顶级检查单据大类名称
   final String doctorAdvice;
   final List<CheckItem> items;
   final List<MedicationChange> medicationChanges;

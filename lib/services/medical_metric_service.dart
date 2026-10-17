@@ -1085,48 +1085,6 @@ ${jsonEncode(distinctNames)}
 
     return heuristicallyClusterProfiles(profiles);
   }
-}
-
-class _MetricAccumulator {
-  final String rawName;
-  final String category;
-  int count = 0;
-  final List<String> dates = [];
-  final List<String> units = [];
-  final List<String> ranges = [];
-  final List<String> sampleValues = [];
-
-  _MetricAccumulator({required this.rawName, required this.category});
-
-  MetricProfile toProfile() {
-    String bestUnit = '';
-    if (units.isNotEmpty) {
-      final unitCounts = <String, int>{};
-      for (var u in units) {
-        unitCounts[u] = (unitCounts[u] ?? 0) + 1;
-      }
-      bestUnit = unitCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-    }
-
-    String bestRange = '';
-    if (ranges.isNotEmpty) {
-      final rangeCounts = <String, int>{};
-      for (var r in ranges) {
-        rangeCounts[r] = (rangeCounts[r] ?? 0) + 1;
-      }
-      bestRange = rangeCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-    }
-
-    return MetricProfile(
-      rawName: rawName,
-      category: category,
-      unit: bestUnit,
-      referenceRange: bestRange,
-      dates: dates..sort(),
-      sampleValues: sampleValues,
-      occurrenceCount: count,
-    );
-  }
 
   /// =========================================================================
   /// --- 🏥 同医院历史复查档案自动对齐引擎 (源头对齐机制) ---
@@ -1322,6 +1280,48 @@ class _MetricAccumulator {
       alignedCategory: finalCategory,
       alignedItemCount: alignedCount,
       alignmentNotes: notes,
+    );
+  }
+}
+
+class _MetricAccumulator {
+  final String rawName;
+  final String category;
+  int count = 0;
+  final List<String> dates = [];
+  final List<String> units = [];
+  final List<String> ranges = [];
+  final List<String> sampleValues = [];
+
+  _MetricAccumulator({required this.rawName, required this.category});
+
+  MetricProfile toProfile() {
+    String bestUnit = '';
+    if (units.isNotEmpty) {
+      final unitCounts = <String, int>{};
+      for (var u in units) {
+        unitCounts[u] = (unitCounts[u] ?? 0) + 1;
+      }
+      bestUnit = unitCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    }
+
+    String bestRange = '';
+    if (ranges.isNotEmpty) {
+      final rangeCounts = <String, int>{};
+      for (var r in ranges) {
+        rangeCounts[r] = (rangeCounts[r] ?? 0) + 1;
+      }
+      bestRange = rangeCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    }
+
+    return MetricProfile(
+      rawName: rawName,
+      category: category,
+      unit: bestUnit,
+      referenceRange: bestRange,
+      dates: dates..sort(),
+      sampleValues: sampleValues,
+      occurrenceCount: count,
     );
   }
 }
