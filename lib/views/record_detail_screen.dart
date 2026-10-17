@@ -934,7 +934,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                         border: Border.all(
                           color: isAbnormal ? const Color(0xFFF43F5E) : const Color(0xFF10B981),
                         ),
-                      ],
+                      ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
