@@ -213,6 +213,10 @@ class StorageService {
     );
   }
 
+  Future<void> updateRecord(CheckRecord record) async {
+    await saveRecord(record);
+  }
+
   Future<void> deleteRecord(String id) async {
     await _db!.delete('records', where: 'id = ?', whereArgs: [id]);
   }

@@ -963,7 +963,7 @@ class RecordsProvider with ChangeNotifier {
       }
 
       if (recordChanged) {
-        await StorageService.instance.updateRecord(r);
+        await StorageService.instance.saveRecord(r);
         modifiedCount++;
       }
     }
