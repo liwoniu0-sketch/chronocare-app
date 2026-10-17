@@ -449,9 +449,64 @@ class RecordsProvider with ChangeNotifier {
   }
 
   List<String> searchItemNames(String query) {
-    if (query.trim().isEmpty) return getAllItemNames();
-    final q = query.trim().toLowerCase();
-    return getAllItemNames().where((name) => name.toLowerCase().contains(q)).toList();
+    final all = getAllItemNames();
+    final rawQ = query.trim().toLowerCase();
+    if (rawQ.isEmpty) return all;
+
+    // 分割字符集（过滤掉空格）与分词
+    final qChars = rawQ.replaceAll(RegExp(r'\s+'), '').split('');
+    final qWords = rawQ.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+
+    // 智能子序列匹配：判断 chars 是否按顺序出现在 target 中 (如 "尿血" 按序出现在 "尿隐血" 中)
+    bool isSubsequence(String target, List<String> chars) {
+      if (chars.isEmpty) return false;
+      int charIdx = 0;
+      for (int i = 0; i < target.length && charIdx < chars.length; i++) {
+        if (target[i] == chars[charIdx]) {
+          charIdx++;
+        }
+      }
+      return charIdx == chars.length;
+    }
+
+    final List<MapEntry<String, int>> scored = [];
+
+    for (var name in all) {
+      final nameLower = name.toLowerCase();
+      String coreName = nameLower;
+      if (coreName.startsWith('[') && coreName.contains(']')) {
+        coreName = coreName.substring(coreName.indexOf(']') + 1).trim();
+      }
+
+      int score = 0;
+      if (coreName == rawQ) {
+        score = 120; // 核心指标完全相等
+      } else if (coreName.startsWith(rawQ)) {
+        score = 110; // 核心指标以关键词开头
+      } else if (coreName.contains(rawQ)) {
+        score = 100; // 核心指标连续包含关键词
+      } else if (nameLower.contains(rawQ)) {
+        score = 90; // 含单据大类连续包含关键词
+      } else if (qWords.length > 1 && qWords.every((w) => nameLower.contains(w))) {
+        score = 85; // 多词同时包含 (如 "尿 隐血")
+      } else if (isSubsequence(coreName, qChars)) {
+        score = 80; // 核心指标按序拆字子序列 (如搜 "尿血" 命中 "尿隐血")
+      } else if (isSubsequence(nameLower, qChars)) {
+        score = 70; // 完整名称按序拆字子序列
+      } else if (qChars.length >= 2 && qChars.every((c) => coreName.contains(c))) {
+        score = 60; // 核心指标包含所有字符 (支持字序颠倒)
+      } else if (qChars.length >= 2 && qChars.every((c) => nameLower.contains(c))) {
+        score = 50; // 完整名称包含所有字符
+      }
+
+      if (score > 0) {
+        scored.add(MapEntry(name, score));
+      }
+    }
+
+    // 按匹配质量高低排序，同分保留原有顺序
+    scored.sort((a, b) => b.value.compareTo(a.value));
+    return scored.map((e) => e.key).toList();
   }
 
   List<MetricHistoryPoint> getMetricHistory(String itemName) {

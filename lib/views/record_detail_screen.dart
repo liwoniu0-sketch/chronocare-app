@@ -37,6 +37,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   int _currentImageIndex = 0;
   bool _hasAppliedInitialCategory = false;
   bool _hasScrolledToHighlight = false;
+  bool _hasJumpedInitialImage = false; // 初始大图仅跳转一次
+  bool _isProgrammaticCategorySwitch = false; // 手动点击栏目防反弹锁
   final GlobalKey _highlightItemKey = GlobalKey();
 
   @override
@@ -145,19 +147,26 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     }
     for (var imgPath in record.imagePaths) {
       if (!imageCategoryMap.containsKey(imgPath)) {
-        imageCategoryMap[imgPath] = currentCategory;
+        imageCategoryMap[imgPath] = categorizedItems.keys.isNotEmpty ? categorizedItems.keys.first : '';
       }
     }
 
-    // 若由外部跳转指定了检查单据栏目，首次构建后自动将滑动大图切换至对应单据图片
-    if (_hasAppliedInitialCategory && widget.initialCategory != null && widget.initialCategory!.isNotEmpty) {
+    // 若由外部跳转指定了检查单据栏目，首次构建后自动将滑动大图切换至对应单据图片 (严格仅触发一次，杜绝后续反复重置)
+    if (!_hasJumpedInitialImage && _hasAppliedInitialCategory && widget.initialCategory != null && widget.initialCategory!.isNotEmpty) {
+      _hasJumpedInitialImage = true;
       final targetCat = widget.initialCategory!.trim();
       final targetImgIdx = record.imagePaths.indexWhere((p) => imageCategoryMap[p] == targetCat);
       if (targetImgIdx >= 0 && _currentImageIndex != targetImgIdx) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _imagePageController.hasClients) {
+            _isProgrammaticCategorySwitch = true;
             _imagePageController.jumpToPage(targetImgIdx);
-            setState(() => _currentImageIndex = targetImgIdx);
+            if (mounted) {
+              setState(() => _currentImageIndex = targetImgIdx);
+            }
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (mounted) _isProgrammaticCategorySwitch = false;
+            });
           }
         });
       }
@@ -337,7 +346,11 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
 
                     return GestureDetector(
                       onTap: () {
-                        setState(() => _selectedCategoryIndex = idx);
+                        if (_selectedCategoryIndex == idx) return;
+                        setState(() {
+                          _selectedCategoryIndex = idx;
+                          _isProgrammaticCategorySwitch = true;
+                        });
                         if (catName != '全部指标') {
                           final imgIdx = record.imagePaths.indexWhere((p) => imageCategoryMap[p] == catName);
                           if (imgIdx >= 0 && _imagePageController.hasClients) {
@@ -348,6 +361,12 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                             );
                           }
                         }
+                        // 动画结束后释放互斥锁，防止误触反向跳回首个栏目
+                        Future.delayed(const Duration(milliseconds: 350), () {
+                          if (mounted) {
+                            _isProgrammaticCategorySwitch = false;
+                          }
+                        });
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -518,12 +537,15 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                                 itemCount: record.imagePaths.length,
                                 onPageChanged: (newIdx) {
                                   setState(() => _currentImageIndex = newIdx);
-                                  // 左右滑动图片时，自动联动切换下方选中的化验单栏目
+                                  // 🎯 核心互斥锁保护：如果是用户点击下方栏目触发的图片翻页，绝不允许反向覆盖用户的栏目选择
+                                  if (_isProgrammaticCategorySwitch) return;
+
+                                  // 仅在用户手动手势左右滑动化验单大图时，才联动切换下方选中的化验单栏目
                                   final imgPath = record.imagePaths[newIdx];
                                   final mappedCat = imageCategoryMap[imgPath];
-                                  if (mappedCat != null) {
+                                  if (mappedCat != null && mappedCat.isNotEmpty && mappedCat != '全部指标') {
                                     final catIdx = categoryNames.indexOf(mappedCat);
-                                    if (catIdx >= 0) {
+                                    if (catIdx >= 0 && catIdx != _selectedCategoryIndex) {
                                       setState(() => _selectedCategoryIndex = catIdx);
                                     }
                                   }
@@ -704,8 +726,12 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                         separatorBuilder: (c, i) => Divider(height: 1, color: isDark ? const Color(0xFF334155) : Colors.grey.shade200),
                         itemBuilder: (c, itemIdx) {
                           final item = currentItems[itemIdx];
-                          final isTarget = widget.highlightItemName != null &&
-                              item.itemName.trim() == widget.highlightItemName!.trim();
+                          final hName = widget.highlightItemName?.trim().toLowerCase();
+                          final itName = item.itemName.trim().toLowerCase();
+                          final isTarget = hName != null && hName.isNotEmpty &&
+                              (itName == hName ||
+                               itName.contains(hName) ||
+                               hName.contains(itName));
                           return _buildCheckItemRow(
                             item,
                             isDark,

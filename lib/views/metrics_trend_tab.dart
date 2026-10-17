@@ -609,7 +609,7 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                 child: TextField(
                   controller: _searchCtrl,
                   decoration: InputDecoration(
-                    hintText: '输入关键词搜索单独指标 (如: 尿蛋白、乙肝、肌酐、血糖、甲状腺)...',
+                    hintText: '快速搜指标 (如搜“尿血/尿隐”均可搜出尿隐血，支持缩写与拆字)...',
                     hintStyle: const TextStyle(fontSize: 13, color: Colors.grey),
                     prefixIcon: const Icon(Icons.search, color: Colors.blueAccent),
                     suffixIcon: _searchKeyword.isNotEmpty
@@ -857,13 +857,22 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                     return ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                       onTap: () {
-                        // 🎯 核心跳转：点击指标直接跳转对应的检查单据报告单
+                        // 🎯 核心跳转：点击指标直接跳转对应的检查单据报告单，并自动滚动居中高亮该指标！
+                        String targetItemName = item.originalItemName.trim();
+                        if (targetItemName.isEmpty && _selectedItemName != null) {
+                          targetItemName = _selectedItemName!.trim();
+                          if (targetItemName.startsWith('[') && targetItemName.contains(']')) {
+                            targetItemName = targetItemName.substring(targetItemName.indexOf(']') + 1).trim();
+                          }
+                        }
+
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (_) => RecordDetailScreen(
                               recordId: item.recordId,
                               initialCategory: item.parentCategory,
+                              highlightItemName: targetItemName,
                             ),
                           ),
                         );
@@ -916,6 +925,22 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                                         '单据: ${item.parentCategory}',
                                         style: const TextStyle(fontSize: 11, color: Colors.blueAccent, fontWeight: FontWeight.bold),
                                       ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: Colors.green.withOpacity(0.28)),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.gps_fixed, size: 10, color: Colors.green),
+                                      SizedBox(width: 3),
+                                      Text('直达档案位置', style: TextStyle(fontSize: 10, color: Colors.green, fontWeight: FontWeight.bold)),
                                     ],
                                   ),
                                 ),
@@ -1117,12 +1142,20 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
               final spotIdx = touchResponse.lineBarSpots!.first.spotIndex;
               if (spotIdx >= 0 && spotIdx < history.length) {
                 final targetItem = history[spotIdx];
+                String targetItemName = targetItem.originalItemName.trim();
+                if (targetItemName.isEmpty && _selectedItemName != null) {
+                  targetItemName = _selectedItemName!.trim();
+                  if (targetItemName.startsWith('[') && targetItemName.contains(']')) {
+                    targetItemName = targetItemName.substring(targetItemName.indexOf(']') + 1).trim();
+                  }
+                }
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (_) => RecordDetailScreen(
                       recordId: targetItem.recordId,
                       initialCategory: targetItem.parentCategory,
+                      highlightItemName: targetItemName,
                     ),
                   ),
                 );
