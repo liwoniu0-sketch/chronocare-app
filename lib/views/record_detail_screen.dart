@@ -709,6 +709,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                           return _buildCheckItemRow(
                             item,
                             isDark,
+                            category: currentCategory,
                             isHighlighted: isTarget,
                             key: isTarget ? _highlightItemKey : null,
                           );
@@ -773,6 +774,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   Widget _buildCheckItemRow(
     CheckItem item,
     bool isDark, {
+    String category = '',
     bool isHighlighted = false,
     Key? key,
   }) {
@@ -850,7 +852,10 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => MetricsTrendTab(initialItemName: item.itemName),
+                            builder: (_) => MetricsTrendTab(
+                              initialItemName: item.itemName,
+                              initialCategory: item.category.isNotEmpty ? item.category : category,
+                            ),
                           ),
                         );
                       },
@@ -920,7 +925,10 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => MetricsTrendTab(initialItemName: item.itemName),
+                          builder: (_) => MetricsTrendTab(
+                            initialItemName: item.itemName,
+                            initialCategory: item.category.isNotEmpty ? item.category : category,
+                          ),
                         ),
                       );
                     },

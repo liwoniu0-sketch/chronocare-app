@@ -231,7 +231,9 @@ class _TimelineTabState extends State<TimelineTab> {
                                           MaterialPageRoute(
                                             builder: (_) => RecordDetailScreen(
                                               recordId: record.id,
-                                              initialCategory: item.category.isNotEmpty ? item.category : null,
+                                              initialCategory: item.category.isNotEmpty
+                                                  ? item.category
+                                                  : (record.category.isNotEmpty ? record.category : null),
                                               highlightItemName: item.itemName,
                                             ),
                                           ),

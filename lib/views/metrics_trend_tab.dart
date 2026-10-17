@@ -8,8 +8,13 @@ import 'record_detail_screen.dart';
 
 class MetricsTrendTab extends StatefulWidget {
   final String? initialItemName;
+  final String? initialCategory;
 
-  const MetricsTrendTab({super.key, this.initialItemName});
+  const MetricsTrendTab({
+    super.key,
+    this.initialItemName,
+    this.initialCategory,
+  });
 
   @override
   State<MetricsTrendTab> createState() => _MetricsTrendTabState();
@@ -21,21 +26,115 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
   String _searchKeyword = '';
   bool _hasAppliedInitialItem = false;
 
+  /// 🌟 结合当前单据栏目与指标名称的 4 级多维智能精准解析定位算法
+  String? _resolveTargetItemName(
+    List<String> allItems,
+    String? targetName,
+    String? targetCategory,
+  ) {
+    if (targetName == null || targetName.trim().isEmpty) return null;
+    final cleanTarget = targetName.trim();
+    final cleanCategory = (targetCategory ?? '').trim();
+
+    // 0. 直接完全命中（如直接传入 "[血常规] 白细胞" 或未重名独有指标 "空腹血糖"）
+    if (allItems.contains(cleanTarget)) {
+      return cleanTarget;
+    }
+
+    // 提取纯指标名与已嵌入的前缀单据
+    String pureName = cleanTarget;
+    String? embeddedCat;
+    if (cleanTarget.startsWith('[') && cleanTarget.contains(']')) {
+      final closeIdx = cleanTarget.indexOf(']');
+      embeddedCat = cleanTarget.substring(1, closeIdx).trim();
+      pureName = cleanTarget.substring(closeIdx + 1).trim();
+    }
+    final effectiveCategory = cleanCategory.isNotEmpty ? cleanCategory : (embeddedCat ?? '');
+
+    // 1. 最高优先级：结合当前单据栏目分类精确匹配 "[$effectiveCategory] $pureName"
+    if (effectiveCategory.isNotEmpty) {
+      final exactWithCat = '[$effectiveCategory] $pureName';
+      if (allItems.contains(exactWithCat)) {
+        return exactWithCat;
+      }
+      for (final item in allItems) {
+        if (item.toLowerCase() == exactWithCat.toLowerCase()) {
+          return item;
+        }
+      }
+      // 容错匹配：单据分类名称包含（例如 "血常规" 与 "血常规检验"）
+      for (final item in allItems) {
+        if (item.startsWith('[') && item.contains(']')) {
+          final closeIdx = item.indexOf(']');
+          final cat = item.substring(1, closeIdx).trim().toLowerCase();
+          final name = item.substring(closeIdx + 1).trim().toLowerCase();
+          final effLower = effectiveCategory.toLowerCase();
+          if (name == pureName.toLowerCase() && (cat.contains(effLower) || effLower.contains(cat))) {
+            return item;
+          }
+        }
+      }
+    }
+
+    // 2. 次高优先级：纯指标名称精确匹配（针对未跨单据重名的独有指标，如 "总胆固醇"、"促甲状腺激素"）
+    if (allItems.contains(pureName)) {
+      return pureName;
+    }
+    for (final item in allItems) {
+      if (item.toLowerCase() == pureName.toLowerCase()) {
+        return item;
+      }
+    }
+
+    // 3. 第三优先级：跨单据重名但分类未完全匹配时，在所有带单据前缀的项中匹配同名指标 "[$anyCat] $pureName"
+    for (final item in allItems) {
+      if (item.startsWith('[') && item.contains(']')) {
+        final closeIdx = item.indexOf(']');
+        final name = item.substring(closeIdx + 1).trim().toLowerCase();
+        if (name == pureName.toLowerCase()) {
+          return item;
+        }
+      }
+    }
+
+    // 4. 第四优先级：模糊包含纯指标名称
+    for (final item in allItems) {
+      if (item.toLowerCase().contains(pureName.toLowerCase())) {
+        return item;
+      }
+    }
+
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
     if (widget.initialItemName != null && widget.initialItemName!.isNotEmpty) {
       _selectedItemName = widget.initialItemName;
-      _hasAppliedInitialItem = true;
     }
   }
 
   @override
   void didUpdateWidget(covariant MetricsTrendTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.initialItemName != null && widget.initialItemName != oldWidget.initialItemName) {
+    if (widget.initialItemName != null &&
+        (widget.initialItemName != oldWidget.initialItemName || widget.initialCategory != oldWidget.initialCategory)) {
+      final prov = Provider.of<RecordsProvider>(context, listen: false);
+      final allItems = prov.getAllItemNames();
+      final resolved = _resolveTargetItemName(allItems, widget.initialItemName, widget.initialCategory);
       setState(() {
-        _selectedItemName = widget.initialItemName;
+        if (resolved != null) {
+          _selectedItemName = resolved;
+          String pureName = widget.initialItemName!.trim();
+          if (pureName.startsWith('[') && pureName.contains(']')) {
+            pureName = pureName.substring(pureName.indexOf(']') + 1).trim();
+          }
+          _searchKeyword = pureName;
+          _searchCtrl.text = pureName;
+        } else {
+          _selectedItemName = widget.initialItemName;
+        }
       });
     }
   }
@@ -51,7 +150,6 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
     final prov = Provider.of<RecordsProvider>(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final allItems = prov.getAllItemNames();
-    final filteredItems = prov.searchItemNames(_searchKeyword);
 
     if (allItems.isEmpty) {
       return Center(
@@ -68,18 +166,33 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
 
     final bool canPop = Navigator.canPop(context);
 
+    // 🌟 首次进入：结合当前单据栏目精准定位指标，并自动填充搜索词方便同名对比
     if (!_hasAppliedInitialItem && widget.initialItemName != null && widget.initialItemName!.isNotEmpty) {
-      _selectedItemName = widget.initialItemName;
+      final resolved = _resolveTargetItemName(allItems, widget.initialItemName, widget.initialCategory);
+      if (resolved != null) {
+        _selectedItemName = resolved;
+        String pureName = widget.initialItemName!.trim();
+        if (pureName.startsWith('[') && pureName.contains(']')) {
+          pureName = pureName.substring(pureName.indexOf(']') + 1).trim();
+        }
+        _searchKeyword = pureName;
+        _searchCtrl.text = pureName;
+      }
       _hasAppliedInitialItem = true;
     }
 
+    // 若当前未选中或选中的不在可用指标中，再次执行智能解析
     if (_selectedItemName == null || !allItems.contains(_selectedItemName)) {
-      if (widget.initialItemName != null && allItems.contains(widget.initialItemName)) {
-        _selectedItemName = widget.initialItemName;
+      final resolved = _resolveTargetItemName(allItems, widget.initialItemName, widget.initialCategory);
+      if (resolved != null) {
+        _selectedItemName = resolved;
       } else {
-        _selectedItemName = filteredItems.isNotEmpty ? filteredItems.first : allItems.first;
+        final currentFiltered = prov.searchItemNames(_searchKeyword);
+        _selectedItemName = currentFiltered.isNotEmpty ? currentFiltered.first : allItems.first;
       }
     }
+
+    final filteredItems = prov.searchItemNames(_searchKeyword);
 
     final history = prov.getMetricHistory(_selectedItemName!);
     final bool isQualitativeProject = history.any((h) => h.isQualitative);
