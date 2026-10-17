@@ -55,7 +55,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
           tag_name: ${{ github.ref_name }}
-          name: ChronoCare ${{ github.ref_name }} AI提示词自定义编辑·严格医学门禁防误合版
+          name: ChronoCare ${{ github.ref_name }} 同医院历史复查源头智能对齐·走势页AI开关纯净版
           body_path: assets/version.json
           files: |
             chronocare-release.apk

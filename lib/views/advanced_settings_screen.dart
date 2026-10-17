@@ -150,6 +150,26 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
                       prov.updateSettings(s);
                     },
                   ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('自动承接同医院历史指标命名 (源头对齐)', style: TextStyle(fontSize: 14)),
+                    subtitle: const Text('识别整理后自动与同医院上次复查对比，相似/同义指标自动承接历史命名，保证走势前后无缝延续'),
+                    value: s.autoAlignWithHospitalHistory,
+                    onChanged: (val) {
+                      s.autoAlignWithHospitalHistory = val;
+                      prov.updateSettings(s);
+                    },
+                  ),
+                  const Divider(height: 1),
+                  SwitchListTile(
+                    title: const Text('指标走势页显示 AI 智能归拢入口', style: TextStyle(fontSize: 14)),
+                    subtitle: const Text('开启后在走势页右上角展示一键归拢入口；关闭后彻底隐藏（默认关闭保持清爽）'),
+                    value: s.showTrendAiStandardization,
+                    onChanged: (val) {
+                      s.showTrendAiStandardization = val;
+                      prov.updateSettings(s);
+                    },
+                  ),
                 ],
               ),
             ),

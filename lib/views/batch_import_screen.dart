@@ -8,9 +8,11 @@ import '../providers/settings_provider.dart';
 import '../models/record.dart';
 import '../models/check_item.dart';
 import '../models/medication.dart';
+import '../models/app_settings.dart';
 import '../services/ocr_service.dart';
 import '../services/ai_service.dart';
 import '../services/image_storage_service.dart';
+import '../services/medical_metric_service.dart';
 import 'record_edit_screen.dart';
 
 enum BatchTaskStatus { pending, ocring, aiParsing, completed, failed }
@@ -22,6 +24,8 @@ class BatchTaskItem {
   String ocrText;
   AiAnalysisResult? result;
   String error;
+  int alignedCount;
+  List<String> alignmentNotes;
 
   BatchTaskItem({
     required this.id,
@@ -30,7 +34,9 @@ class BatchTaskItem {
     this.ocrText = '',
     this.result,
     this.error = '',
-  });
+    this.alignedCount = 0,
+    List<String>? alignmentNotes,
+  }) : alignmentNotes = alignmentNotes ?? [];
 }
 
 class BatchImportScreen extends StatefulWidget {
@@ -212,7 +218,21 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
         final count = task.result?.items.length ?? 0;
         final dStr = task.result?.checkDate?.toIso8601String().substring(0, 10) ?? '';
         final cat = task.result?.category ?? '检验项目';
-        return Text('已解析 $count 个指标 · $cat · $dStr', style: const TextStyle(color: Colors.green, fontSize: 12));
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('已解析 $count 个指标 · $cat · $dStr', style: const TextStyle(color: Colors.green, fontSize: 12)),
+            if (task.alignedCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  '✨ 已自动承接同医院历史命名 (${task.alignedCount} 项对齐)',
+                  style: TextStyle(color: Colors.blue.shade700, fontSize: 11, fontWeight: FontWeight.w500),
+                ),
+              ),
+          ],
+        );
       case BatchTaskStatus.failed:
         return Text('失败: ${task.error}', style: const TextStyle(color: Colors.red, fontSize: 12));
     }
@@ -260,8 +280,9 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     }
   }
 
-  Future<void> _runBatchPipeline(settings) async {
+  Future<void> _runBatchPipeline(AppSettings settings) async {
     setState(() => _isProcessing = true);
+    final recordsProv = Provider.of<RecordsProvider>(context, listen: false);
 
     for (var task in _tasks) {
       if (task.status == BatchTaskStatus.completed) continue;
@@ -276,7 +297,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
             imageFile: task.file,
             settings: settings,
           );
-          _bindResultToTask(task, res);
+          _bindResultToTask(task, res, recordsProv, settings);
         } else {
           // 方式 2 & 3: 联网 OCR (ocr_space) 或端侧离线引擎提取文字，再由 AI 深度整理
           setState(() => task.status = BatchTaskStatus.ocring);
@@ -293,7 +314,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
               settings: settings,
               imagePath: task.file.path,
             );
-            _bindResultToTask(task, res);
+            _bindResultToTask(task, res, recordsProv, settings);
           } else {
             task.status = BatchTaskStatus.completed;
           }
@@ -308,7 +329,12 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     setState(() => _isProcessing = false);
   }
 
-  void _bindResultToTask(BatchTaskItem task, AiAnalysisResult res) {
+  void _bindResultToTask(
+    BatchTaskItem task,
+    AiAnalysisResult res,
+    RecordsProvider recordsProv,
+    AppSettings settings,
+  ) {
     // 核心绑定：将当次识别出来的所有 items 的 sourceImagePath 绑定为当前图片
     final categoryName = res.category.isNotEmpty ? res.category : '常规化验';
     for (var item in res.items) {
@@ -317,6 +343,25 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
         item.category = categoryName;
       }
     }
+
+    // 🏥 核心特性：自动比对同医院历史复查结果，进行指标与单据命名对齐
+    if (settings.autoAlignWithHospitalHistory && recordsProv.records.isNotEmpty) {
+      final alignRes = MedicalMetricService.instance.alignWithHospitalHistory(
+        newItems: res.items,
+        currentHospital: res.hospital,
+        currentCategory: categoryName,
+        historyRecords: recordsProv.records,
+      );
+
+      res.items.clear();
+      res.items.addAll(alignRes.alignedItems);
+      if (alignRes.alignedCategory.isNotEmpty) {
+        res.category = alignRes.alignedCategory;
+      }
+      task.alignedCount = alignRes.alignedItemCount;
+      task.alignmentNotes = alignRes.alignmentNotes;
+    }
+
     task.result = res;
     task.status = BatchTaskStatus.completed;
   }

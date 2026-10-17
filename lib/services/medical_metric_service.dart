@@ -1127,6 +1127,218 @@ class _MetricAccumulator {
       occurrenceCount: count,
     );
   }
+
+  /// =========================================================================
+  /// --- 🏥 同医院历史复查档案自动对齐引擎 (源头对齐机制) ---
+  /// =========================================================================
+  /// 在化验单识别/整理完成时，自动比对该患者在该医院（或历史最近）的历史复查结果：
+  /// 1. 自动对齐单据大类名称 (如上次叫“血常规”，本次AI识别叫“全血分析”，自动统一为上次名称)
+  /// 2. 自动对齐指标命名 (如上次叫“白细胞”，本次叫“白细胞计数”或“WBC”，自动统一为上次名称)
+  /// 3. 若发现全新项目，保留新指标并正常建档
+  HospitalHistoryAlignmentResult alignWithHospitalHistory({
+    required List<CheckItem> newItems,
+    required String currentHospital,
+    required String currentCategory,
+    required List<CheckRecord> historyRecords,
+  }) {
+    if (newItems.isEmpty || historyRecords.isEmpty) {
+      return HospitalHistoryAlignmentResult(
+        alignedItems: newItems,
+        alignedCategory: currentCategory,
+        alignedItemCount: 0,
+        alignmentNotes: [],
+      );
+    }
+
+    final cleanCurrentHosp = currentHospital.trim().toLowerCase();
+
+    // 1. 优先筛选同一家医院的历史记录
+    List<CheckRecord> targetRecords = [];
+    if (cleanCurrentHosp.isNotEmpty) {
+      targetRecords = historyRecords.where((r) {
+        final h = r.hospital.trim().toLowerCase();
+        return h == cleanCurrentHosp ||
+            (cleanCurrentHosp.length >= 3 && h.contains(cleanCurrentHosp)) ||
+            (h.length >= 3 && cleanCurrentHosp.contains(h));
+      }).toList();
+    }
+
+    // 2. 如果同医院无记录，降级参考该患者的历史复查记录池
+    if (targetRecords.isEmpty) {
+      targetRecords = List.from(historyRecords);
+    }
+
+    // 按复查日期倒序排序，最优先对齐最近一次复查记录
+    targetRecords.sort((a, b) => b.checkDate.compareTo(a.checkDate));
+
+    // 3. 单据栏目名称智能对齐
+    String finalCategory = currentCategory.trim();
+    final cleanCurrentCat = normalizeCategory(finalCategory);
+    final List<String> notes = [];
+
+    for (var r in targetRecords) {
+      final histCat = r.category.trim();
+      if (histCat.isEmpty) continue;
+      if (normalizeCategory(histCat) == cleanCurrentCat) {
+        if (finalCategory != histCat) {
+          notes.add('单据栏目由 [$finalCategory] 统一为历史同医院分类 [$histCat]');
+          finalCategory = histCat;
+        }
+        break;
+      }
+    }
+
+    // 4. 收集历史指标候选池（优先同 category，其次跨 category，按时间倒序去重）
+    final Map<String, CheckItem> histExactMap = {};
+    final List<CheckItem> sameCatCandidateList = [];
+    final List<CheckItem> otherCatCandidateList = [];
+    final Set<String> seenHistKeys = {};
+
+    for (var r in targetRecords) {
+      final rCatNorm = normalizeCategory(r.category);
+      final isSameCat = rCatNorm == cleanCurrentCat;
+
+      for (var it in r.items) {
+        final raw = it.itemName.trim();
+        if (raw.isEmpty) continue;
+
+        histExactMap.putIfAbsent(raw.toLowerCase(), () => it);
+
+        final key = '${raw.toLowerCase()}@${it.category.toLowerCase()}';
+        if (!seenHistKeys.contains(key)) {
+          seenHistKeys.add(key);
+          if (isSameCat) {
+            sameCatCandidateList.add(it);
+          } else {
+            otherCatCandidateList.add(it);
+          }
+        }
+      }
+    }
+
+    // 候选池按同栏目优先组合
+    final List<CheckItem> allCandidateList = [
+      ...sameCatCandidateList,
+      ...otherCatCandidateList,
+    ];
+
+    int alignedCount = 0;
+    final List<CheckItem> alignedItems = [];
+
+    for (var newItem in newItems) {
+      final rawNewName = newItem.itemName.trim();
+      if (rawNewName.isEmpty) {
+        alignedItems.add(newItem);
+        continue;
+      }
+
+      // 情况 1：历史中已存在完全同名指标，直接保留，无须重命名
+      if (histExactMap.containsKey(rawNewName.toLowerCase())) {
+        alignedItems.add(newItem.copyWith(
+          category: finalCategory.isNotEmpty ? finalCategory : newItem.category,
+        ));
+        continue;
+      }
+
+      // 情况 2：寻找历史中最相似、同义或前缀变体的指标
+      CheckItem? matchedHistItem;
+      String matchReason = '';
+
+      final effectiveCategory = newItem.category.isNotEmpty ? newItem.category : finalCategory;
+      final stdNew = findStandardMetric(rawNewName, category: effectiveCategory);
+
+      for (var histIt in allCandidateList) {
+        final rawHistName = histIt.itemName.trim();
+
+        // 🚨 门禁 1：临床互斥黑名单一票否决 (如 ALT 与 AST 绝不合并)
+        if (_areKnownMutuallyExclusive(rawNewName, rawHistName)) {
+          continue;
+        }
+
+        // 🚨 门禁 2：百分比与绝对计数一票否决
+        final isNewPct = _isPercentageMetric(rawNewName, newItem.unit);
+        final isHistPct = _isPercentageMetric(rawHistName, histIt.unit);
+        if (isNewPct != isHistPct) {
+          continue;
+        }
+
+        // 🚨 门禁 3：体液大类（尿常规 vs 血液生化）一票否决
+        final isNewUrine = _isUrineCategory(effectiveCategory, rawNewName);
+        final isHistUrine = _isUrineCategory(histIt.category, rawHistName);
+        if (isNewUrine != isHistUrine) {
+          continue;
+        }
+
+        // 条件 A：两者在权威知识库中命中同一标准指标
+        if (stdNew != null) {
+          final stdHist = findStandardMetric(rawHistName, category: histIt.category);
+          if (stdHist != null && stdHist.standardName == stdNew.standardName) {
+            matchedHistItem = histIt;
+            matchReason = '权威同义词对齐 (${stdNew.standardName})';
+            break;
+          }
+        }
+
+        // 条件 B：修饰词变体（如 "白细胞计数" 与 "白细胞"、"空腹血糖" 与 "血糖"）
+        if (_isNameVariantByModifiers(rawNewName, rawHistName)) {
+          matchedHistItem = histIt;
+          matchReason = '指标命名习惯对齐';
+          break;
+        }
+
+        // 条件 C：清洗核心词完全一致（去除中英文括号英文缩写及标点后一致）
+        final cleanA = _cleanName(rawNewName);
+        final cleanB = _cleanName(rawHistName);
+        if (cleanA.length >= 2 && cleanA == cleanB) {
+          matchedHistItem = histIt;
+          matchReason = '核心名称一致';
+          break;
+        }
+      }
+
+      if (matchedHistItem != null) {
+        alignedCount++;
+        final prevName = matchedHistItem.itemName.trim();
+        notes.add('[$rawNewName] 自动承接同医院历史命名 [$prevName] ($matchReason)');
+
+        // 自动重命名为上次历史名称！
+        final updated = newItem.copyWith(
+          itemName: prevName,
+          category: finalCategory.isNotEmpty
+              ? finalCategory
+              : (matchedHistItem.category.isNotEmpty ? matchedHistItem.category : newItem.category),
+        );
+        alignedItems.add(updated);
+      } else {
+        // 未匹配项：判定为该医院新增检查项目，保留本次识别原名
+        alignedItems.add(newItem.copyWith(
+          category: finalCategory.isNotEmpty ? finalCategory : newItem.category,
+        ));
+      }
+    }
+
+    return HospitalHistoryAlignmentResult(
+      alignedItems: alignedItems,
+      alignedCategory: finalCategory,
+      alignedItemCount: alignedCount,
+      alignmentNotes: notes,
+    );
+  }
+}
+
+/// 同医院历史对齐处理结果
+class HospitalHistoryAlignmentResult {
+  final List<CheckItem> alignedItems;
+  final String alignedCategory;
+  final int alignedItemCount;
+  final List<String> alignmentNotes;
+
+  HospitalHistoryAlignmentResult({
+    required this.alignedItems,
+    required this.alignedCategory,
+    required this.alignedItemCount,
+    required this.alignmentNotes,
+  });
 }
 
 /// 指标全景指纹：聚合指标名、单据分类、单位、参考区间、出现日期与样本值

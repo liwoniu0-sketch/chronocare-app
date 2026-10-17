@@ -30,9 +30,11 @@ class AppSettings {
   bool ocrAutoRotate; // 图像自动旋转矫正
   bool ocrPreprocess; // 图像对比度增强
 
-  // --- 批量导入与自动化（两个独立核心开关） ---
+  // --- 批量导入与自动化（核心开关） ---
   bool batchAutoOcr; // 开关1：批量上传后自动进行 OCR 识别
   bool batchAutoAiParse; // 开关2：OCR 完成后自动调用 AI 整理分类入库
+  bool autoAlignWithHospitalHistory; // 开关3：整理完成后自动与同医院历史复查项目对比对齐（默认开启）
+  bool showTrendAiStandardization; // 走势页面是否显示 AI 归拢整理功能按钮（默认关闭保持清爽）
   int batchConcurrency; // 批量并发数 (1~5)
 
   // --- 本地保存与自定义文件夹配置 ---
@@ -98,6 +100,8 @@ class AppSettings {
     this.ocrPreprocess = true,
     this.batchAutoOcr = true,
     this.batchAutoAiParse = true,
+    this.autoAlignWithHospitalHistory = true,
+    this.showTrendAiStandardization = false,
     this.batchConcurrency = 2,
     this.customLocalBackupPath = '',
     this.customLocalImagesPath = '',
@@ -153,6 +157,8 @@ class AppSettings {
       'ocrPreprocess': ocrPreprocess,
       'batchAutoOcr': batchAutoOcr,
       'batchAutoAiParse': batchAutoAiParse,
+      'autoAlignWithHospitalHistory': autoAlignWithHospitalHistory,
+      'showTrendAiStandardization': showTrendAiStandardization,
       'batchConcurrency': batchConcurrency,
       'customLocalBackupPath': customLocalBackupPath,
       'customLocalImagesPath': customLocalImagesPath,
@@ -219,6 +225,8 @@ class AppSettings {
       ocrPreprocess: map['ocrPreprocess'] ?? true,
       batchAutoOcr: map['batchAutoOcr'] ?? true,
       batchAutoAiParse: map['batchAutoAiParse'] ?? true,
+      autoAlignWithHospitalHistory: map['autoAlignWithHospitalHistory'] ?? true,
+      showTrendAiStandardization: map['showTrendAiStandardization'] ?? false,
       batchConcurrency: map['batchConcurrency'] ?? 2,
       customLocalBackupPath: map['customLocalBackupPath'] ?? '',
       customLocalImagesPath: map['customLocalImagesPath'] ?? '',

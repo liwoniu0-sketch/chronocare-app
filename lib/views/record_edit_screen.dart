@@ -10,6 +10,7 @@ import '../models/record.dart';
 import '../models/check_item.dart';
 import '../models/medication.dart';
 import '../services/image_storage_service.dart';
+import '../services/medical_metric_service.dart';
 
 class RecordEditScreen extends StatefulWidget {
   final CheckRecord? record;
@@ -527,6 +528,22 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
     }
 
     final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+
+    // 🏥 核心特性：自动比对同医院历史复查结果，进行指标与单据命名对齐
+    if (settings.autoAlignWithHospitalHistory && prov.records.isNotEmpty) {
+      final alignRes = MedicalMetricService.instance.alignWithHospitalHistory(
+        newItems: _items,
+        currentHospital: _hospitalCtrl.text.trim(),
+        currentCategory: _categoryCtrl.text.trim(),
+        historyRecords: prov.records.where((r) => r.id != _id).toList(),
+      );
+      _items.clear();
+      _items.addAll(alignRes.alignedItems);
+      if (alignRes.alignedCategory.isNotEmpty && _categoryCtrl.text.trim().isEmpty) {
+        _categoryCtrl.text = alignRes.alignedCategory;
+      }
+    }
+
     final List<String> permanentImages = [];
     for (var img in _images) {
       final pPath = await ImageStorageService.instance.persistImage(

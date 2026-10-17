@@ -89,4 +89,34 @@ class CheckItem {
       notes: map['notes'] ?? '',
     );
   }
+
+  CheckItem copyWith({
+    String? id,
+    String? itemName,
+    String? value,
+    double? numericValue,
+    String? unit,
+    String? referenceRange,
+    double? refMin,
+    double? refMax,
+    String? status,
+    String? category,
+    String? sourceImagePath,
+    String? notes,
+  }) {
+    return CheckItem(
+      id: id ?? this.id,
+      itemName: itemName ?? this.itemName,
+      value: value ?? this.value,
+      numericValue: numericValue ?? this.numericValue,
+      unit: unit ?? this.unit,
+      referenceRange: referenceRange ?? this.referenceRange,
+      refMin: refMin ?? this.refMin,
+      refMax: refMax ?? this.refMax,
+      status: status ?? this.status,
+      category: category ?? this.category,
+      sourceImagePath: sourceImagePath ?? this.sourceImagePath,
+      notes: notes ?? this.notes,
+    );
+  }
 }

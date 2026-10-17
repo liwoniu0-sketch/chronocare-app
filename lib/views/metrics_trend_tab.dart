@@ -530,6 +530,8 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
       }
     }
 
+    final settings = Provider.of<SettingsProvider>(context).settings;
+
     return Scaffold(
       appBar: canPop
           ? AppBar(
@@ -538,6 +540,14 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               centerTitle: true,
+              actions: [
+                if (settings.showTrendAiStandardization)
+                  IconButton(
+                    icon: const Icon(Icons.auto_awesome, color: Colors.teal),
+                    tooltip: 'AI 智能归拢整理',
+                    onPressed: () => _runAiStandardization(context),
+                  ),
+              ],
             )
           : null,
       body: SingleChildScrollView(
@@ -545,49 +555,50 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 🌟 智能指标归拢整理入口
-            Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF0FDF4),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFBBF7D0),
+            // 🌟 智能指标归拢整理入口 (受设置中的 showTrendAiStandardization 开关控制，默认关闭以保持界面清爽)
+            if (settings.showTrendAiStandardization)
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF0FDF4),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFBBF7D0),
+                  ),
                 ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.auto_awesome, color: Colors.teal, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '同名/同义指标分散了？点击一键智能归拢合并历史走势',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isDark ? Colors.white70 : const Color(0xFF166534),
+                child: Row(
+                  children: [
+                    const Icon(Icons.auto_awesome, color: Colors.teal, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '同名/同义指标分散了？点击一键智能归拢合并历史走势',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white70 : const Color(0xFF166534),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  _isStandardizing
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : TextButton(
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    const SizedBox(width: 6),
+                    _isStandardizing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : TextButton(
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            onPressed: () => _runAiStandardization(context),
+                            child: const Text('立即归拢', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.teal)),
                           ),
-                          onPressed: () => _runAiStandardization(context),
-                          child: const Text('立即归拢', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.teal)),
-                        ),
-                ],
+                  ],
+                ),
               ),
-            ),
 
             // 1. 关键词即时搜索单独项目
             Card(

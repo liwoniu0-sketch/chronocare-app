@@ -37,6 +37,8 @@ class SettingsProvider with ChangeNotifier {
     String? themeMode,
     String? primaryColorHex,
     bool? compactCardMode,
+    bool? autoAlignWithHospitalHistory,
+    bool? showTrendAiStandardization,
     List<String>? enabledTabs,
   }) async {
     if (aiProvider != null) _settings.aiProvider = aiProvider;
@@ -45,6 +47,8 @@ class SettingsProvider with ChangeNotifier {
     if (ocrEngine != null) _settings.ocrEngine = ocrEngine;
     if (batchAutoOcr != null) _settings.batchAutoOcr = batchAutoOcr;
     if (batchAutoAiParse != null) _settings.batchAutoAiParse = batchAutoAiParse;
+    if (autoAlignWithHospitalHistory != null) _settings.autoAlignWithHospitalHistory = autoAlignWithHospitalHistory;
+    if (showTrendAiStandardization != null) _settings.showTrendAiStandardization = showTrendAiStandardization;
     if (webdavEnabled != null) _settings.webdavEnabled = webdavEnabled;
     if (webdavUrl != null) _settings.webdavUrl = webdavUrl;
     if (webdavUsername != null) _settings.webdavUsername = webdavUsername;
