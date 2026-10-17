@@ -909,28 +909,34 @@ class RecordsProvider with ChangeNotifier {
   }
 
   // =========================================================================
-  // --- 🧬 智能指标归一化与全量历史数据对齐 ---
+  // --- 🧬 智能指标归一化与全量历史数据对齐中枢 ---
   // =========================================================================
 
-  /// 扫描全库所有化验单，使用本地医学知识图谱 + AI 批量归一化所有指标名称与单据分类
-  Future<int> batchStandardizeRecordsWithAi(dynamic settings) async {
-    // 1. 提取所有已录入的不同指标名称
-    final Set<String> allDistinctNames = {};
-    for (var r in _records) {
-      for (var it in r.items) {
-        if (it.itemName.trim().isNotEmpty) {
-          allDistinctNames.add(it.itemName.trim());
-        }
-      }
+  /// 全局多维指标智能研判与自动对齐对并器 (综合指标名、单据栏目、单位、参考范围、日期)
+  Future<MetricReconciliationReport> executeSmartMetricReconciliation(dynamic settings) async {
+    // 1. 提取所有复查单据中的指标全景指纹 (名称、分类、单位、参考区间、日期、样本值)
+    final profiles = MedicalMetricService.instance.extractMetricProfiles(_records);
+    if (profiles.isEmpty) {
+      return MetricReconciliationReport(
+        modifiedRecordsCount: 0,
+        clusters: [],
+        totalProfilesScanned: 0,
+      );
     }
 
-    if (allDistinctNames.isEmpty) return 0;
-
-    // 2. 调用 MedicalMetricService 生成全量归一化映射表
-    final nameMapping = await MedicalMetricService.instance.aiClassifyAndStandardizeItemNames(
-      distinctNames: allDistinctNames.toList(),
+    // 2. 双轨驱动：AI 大模型深度研判 + 本地启发式多维对齐兜底
+    final clusters = await MedicalMetricService.instance.reconcileMetricsWithAi(
+      profiles: profiles,
       settings: settings,
     );
+
+    // 3. 构建映射快速字典：原始指标名(小写) -> 目标集群
+    final Map<String, MetricReconciliationCluster> rawNameToCluster = {};
+    for (var c in clusters) {
+      for (var raw in c.matchedRawNames) {
+        rawNameToCluster[raw.trim().toLowerCase()] = c;
+      }
+    }
 
     int modifiedCount = 0;
     for (var r in _records) {
@@ -944,13 +950,29 @@ class RecordsProvider with ChangeNotifier {
         recordChanged = true;
       }
 
-      // 规范化内部每个指标条目 (如 "WBC" -> "白细胞计数 (WBC)")
+      // 规范化内部每个指标条目 (名称、单位、分类对齐)
       for (var it in r.items) {
         final rawName = it.itemName.trim();
-        final mapped = nameMapping[rawName];
-        if (mapped != null && mapped.isNotEmpty && mapped != rawName) {
-          it.itemName = mapped;
-          recordChanged = true;
+        final rawLower = rawName.toLowerCase();
+
+        // 优先查看集群归并映射
+        final cluster = rawNameToCluster[rawLower];
+        if (cluster != null) {
+          if (it.itemName != cluster.standardName) {
+            it.itemName = cluster.standardName;
+            recordChanged = true;
+          }
+          if (it.category != cluster.standardCategory) {
+            it.category = cluster.standardCategory;
+            recordChanged = true;
+          }
+        } else {
+          // 本地知识库权威名称对齐兜底
+          final stdName = MedicalMetricService.instance.getStandardDisplayName(rawName, category: it.category);
+          if (stdName != rawName) {
+            it.itemName = stdName;
+            recordChanged = true;
+          }
         }
 
         // 同步规范化 item 自身的 category
@@ -971,8 +993,31 @@ class RecordsProvider with ChangeNotifier {
     if (modifiedCount > 0) {
       await loadData();
     }
-    return modifiedCount;
+
+    return MetricReconciliationReport(
+      modifiedRecordsCount: modifiedCount,
+      clusters: clusters,
+      totalProfilesScanned: profiles.length,
+    );
   }
+
+  /// 兼容旧版调用入口
+  Future<int> batchStandardizeRecordsWithAi(dynamic settings) async {
+    final report = await executeSmartMetricReconciliation(settings);
+    return report.modifiedRecordsCount;
+  }
+}
+
+class MetricReconciliationReport {
+  final int modifiedRecordsCount;
+  final List<MetricReconciliationCluster> clusters;
+  final int totalProfilesScanned;
+
+  MetricReconciliationReport({
+    required this.modifiedRecordsCount,
+    required this.clusters,
+    required this.totalProfilesScanned,
+  });
 }
 
 class _ParsedDosage {

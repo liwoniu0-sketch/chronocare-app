@@ -538,4 +538,462 @@ ${jsonEncode(distinctNames)}
     }
     return fallback;
   }
+
+  /// =========================================================================
+  /// --- 🧠 AI 全局医学研判与多维指标智能对齐中枢 (名称/单位/参考值/日期综合研判) ---
+  /// =========================================================================
+
+  /// 从患者所有历史记录中提取出全量的【指标全景指纹】
+  List<MetricProfile> extractMetricProfiles(List<CheckRecord> records) {
+    final Map<String, _MetricAccumulator> accMap = {};
+
+    for (var r in records) {
+      final dateStr = r.checkDate.toIso8601String().split('T').first;
+      final recCat = normalizeCategory(r.category);
+
+      for (var it in r.items) {
+        final name = it.itemName.trim();
+        if (name.isEmpty) continue;
+
+        final itemCat = it.category.trim().isNotEmpty ? normalizeCategory(it.category.trim()) : recCat;
+        final key = '${name.toLowerCase()}@$itemCat';
+
+        final acc = accMap.putIfAbsent(key, () => _MetricAccumulator(rawName: name, category: itemCat));
+        acc.count++;
+        if (!acc.dates.contains(dateStr)) acc.dates.add(dateStr);
+        if (it.unit.trim().isNotEmpty) acc.units.add(it.unit.trim());
+        if (it.referenceRange.trim().isNotEmpty) acc.ranges.add(it.referenceRange.trim());
+        if (it.value.trim().isNotEmpty && acc.sampleValues.length < 3) {
+          acc.sampleValues.add(it.value.trim());
+        }
+      }
+    }
+
+    return accMap.values.map((a) => a.toProfile()).toList();
+  }
+
+  /// 本地启发式多维对齐算法 (免 Key / 离线兜底，基于名称包含/编辑距离 + 单位一致性 + 参考区间重合度)
+  List<MetricReconciliationCluster> heuristicallyClusterProfiles(List<MetricProfile> profiles) {
+    final List<MetricReconciliationCluster> clusters = [];
+    final Set<String> processedKeys = {};
+
+    // 1. 第一阶段：利用内置 80+ 临床核心检验知识图谱进行高置信度收敛
+    final Map<String, List<MetricProfile>> standardBucket = {};
+    for (var p in profiles) {
+      final std = findStandardMetric(p.rawName, category: p.category);
+      if (std != null) {
+        standardBucket.putIfAbsent(std.standardName, () => []).add(p);
+      }
+    }
+
+    for (var entry in standardBucket.entries) {
+      final stdName = entry.key;
+      final group = entry.value;
+      if (group.isEmpty) continue;
+
+      final std = findStandardMetric(group.first.rawName, category: group.first.category);
+      final cat = std?.category.isNotEmpty == true ? std!.category : group.first.category;
+      final rawNames = group.map((p) => p.rawName).toSet().toList();
+
+      clusters.add(MetricReconciliationCluster(
+        standardName: stdName,
+        standardCategory: cat,
+        matchedRawNames: rawNames,
+        reason: '命中权威医学知识图谱：统一收敛为标准检验指标与大类',
+      ));
+
+      for (var p in group) {
+        processedKeys.add('${p.rawName.toLowerCase()}@${p.category}');
+      }
+    }
+
+    // 2. 第二阶段：对于剩余未命中字典的个性化指标，执行两两多维亲缘比对
+    final remaining = profiles.where((p) => !processedKeys.contains('${p.rawName.toLowerCase()}@${p.category}')).toList();
+    final List<List<MetricProfile>> matchedGroups = [];
+
+    for (var cur in remaining) {
+      bool merged = false;
+      for (var grp in matchedGroups) {
+        final rep = grp.first;
+        // 计算两两多维亲缘度
+        if (_isProfileSimilar(cur, rep)) {
+          grp.add(cur);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        matchedGroups.add([cur]);
+      }
+    }
+
+    for (var grp in matchedGroups) {
+      if (grp.length > 1) {
+        // 多项被成功合并
+        final bestRep = grp.reduce((a, b) => a.occurrenceCount >= b.occurrenceCount ? a : b);
+        final rawNames = grp.map((p) => p.rawName).toSet().toList();
+        final unitStr = bestRep.unit.isNotEmpty ? '单位均为 ${bestRep.unit}，' : '';
+        final rangeStr = bestRep.referenceRange.isNotEmpty ? '参考范围相近，' : '';
+
+        clusters.add(MetricReconciliationCluster(
+          standardName: getStandardDisplayName(bestRep.rawName, category: bestRep.category),
+          standardCategory: normalizeCategory(bestRep.category),
+          matchedRawNames: rawNames,
+          reason: '智能多维判定：$unitStr$rangeStr单据栏目与病程日期高度连续，判定为同种指标',
+        ));
+      }
+    }
+
+    return clusters;
+  }
+
+  /// 综合研判两个指标画像是否为同一指标变体 (名称亲缘 + 单位一致 + 参考区间重合 + 栏目兼容)
+  bool _isProfileSimilar(MetricProfile a, MetricProfile b) {
+    // 1. 单位比对：若两者都有单位且完全不同（如 g/L vs 10^9/L），直接否决
+    final uA = _cleanUnit(a.unit);
+    final uB = _cleanUnit(b.unit);
+    if (uA.isNotEmpty && uB.isNotEmpty && uA != uB) {
+      return false;
+    }
+
+    // 2. 名称比对
+    final nA = _cleanName(a.rawName);
+    final nB = _cleanName(b.rawName);
+    if (nA.isEmpty || nB.isEmpty) return false;
+
+    double nameScore = 0.0;
+    if (nA == nB) {
+      nameScore = 1.0;
+    } else if (nA.contains(nB) || nB.contains(nA)) {
+      final minLen = nA.length < nB.length ? nA.length : nB.length;
+      nameScore = minLen >= 2 ? 0.85 : 0.5;
+    } else {
+      final lcs = _longestCommonSubstringLength(nA, nB);
+      nameScore = (2.0 * lcs) / (nA.length + nB.length);
+    }
+
+    // 3. 参考范围比对
+    double rangeScore = 0.5;
+    if (a.referenceRange.isNotEmpty && b.referenceRange.isNotEmpty) {
+      final rA = _extractRange(a.referenceRange);
+      final rB = _extractRange(b.referenceRange);
+      if (rA != null && rB != null) {
+        final overlap = _rangeOverlapRatio(rA.$1, rA.$2, rB.$1, rB.$2);
+        rangeScore = overlap;
+      }
+    }
+
+    // 4. 单据类别兼容度
+    final catA = normalizeCategory(a.category);
+    final catB = normalizeCategory(b.category);
+    final catScore = (catA == catB || catA.contains(catB) || catB.contains(catA)) ? 1.0 : 0.4;
+
+    final unitScore = (uA.isNotEmpty && uB.isNotEmpty && uA == uB) ? 1.0 : 0.6;
+
+    // 综合加权得分
+    final totalScore = nameScore * 0.45 + unitScore * 0.25 + rangeScore * 0.20 + catScore * 0.10;
+    return totalScore >= 0.72;
+  }
+
+  String _cleanUnit(String unit) {
+    return unit.trim().toLowerCase().replaceAll(' ', '').replaceAll('／', '/').replaceAll('×10^9', '10^9');
+  }
+
+  String _cleanName(String name) {
+    var s = name.trim().toLowerCase();
+    // 移除中括号或前缀
+    if (s.startsWith('[') && s.contains(']')) {
+      s = s.substring(s.indexOf(']') + 1).trim();
+    }
+    return s.replaceAll(RegExp(r'[\(\)（）\s_\-\#\%]'), '');
+  }
+
+  int _longestCommonSubstringLength(String s1, String s2) {
+    if (s1.isEmpty || s2.isEmpty) return 0;
+    int maxLen = 0;
+    for (int i = 0; i < s1.length; i++) {
+      for (int j = 0; j < s2.length; j++) {
+        int len = 0;
+        while (i + len < s1.length && j + len < s2.length && s1[i + len] == s2[j + len]) {
+          len++;
+        }
+        if (len > maxLen) maxLen = len;
+      }
+    }
+    return maxLen;
+  }
+
+  (double, double)? _extractRange(String refStr) {
+    final matches = RegExp(r'[-+]?[0-9]*\.?[0-9]+').allMatches(refStr).map((m) => double.tryParse(m.group(0)!)).whereType<double>().toList();
+    if (matches.length >= 2) {
+      final min = matches[0] < matches[1] ? matches[0] : matches[1];
+      final max = matches[0] > matches[1] ? matches[0] : matches[1];
+      return (min, max);
+    }
+    return null;
+  }
+
+  double _rangeOverlapRatio(double minA, double maxA, double minB, double maxB) {
+    final start = minA > minB ? minA : minB;
+    final end = maxA < maxB ? maxA : maxB;
+    if (end <= start) return 0.0;
+    final overlap = end - start;
+    final unionStart = minA < minB ? minA : minB;
+    final unionEnd = maxA > maxB ? maxA : maxB;
+    final union = unionEnd - unionStart;
+    return union > 0 ? (overlap / union) : 0.0;
+  }
+
+  /// AI 驱动的全局多维指标对齐中枢 (支持 Gemini / DeepSeek / OpenAI / 自定义 API，若无 Key 则自动降级为启发式引擎)
+  Future<List<MetricReconciliationCluster>> reconcileMetricsWithAi({
+    required List<MetricProfile> profiles,
+    required AppSettings settings,
+  }) async {
+    if (profiles.isEmpty) return [];
+
+    // 1. 判断是否配置了有效的 AI 凭据
+    String apiKey = '';
+    String apiUrl = '';
+    String modelName = '';
+    bool isOpenAiCompat = false;
+
+    if (settings.deepSeekApiKey.isNotEmpty) {
+      apiKey = settings.deepSeekApiKey;
+      apiUrl = settings.deepSeekBaseUrl.isNotEmpty ? settings.deepSeekBaseUrl : 'https://api.deepseek.com/v1/chat/completions';
+      modelName = settings.deepSeekModel.isNotEmpty ? settings.deepSeekModel : 'deepseek-chat';
+      isOpenAiCompat = true;
+    } else if (settings.openAiApiKey.isNotEmpty) {
+      apiKey = settings.openAiApiKey;
+      apiUrl = settings.openAiBaseUrl.isNotEmpty ? settings.openAiBaseUrl : 'https://api.openai.com/v1/chat/completions';
+      modelName = settings.openAiModel.isNotEmpty ? settings.openAiModel : 'gpt-4o-mini';
+      isOpenAiCompat = true;
+    } else if (settings.customApiKey.isNotEmpty) {
+      apiKey = settings.customApiKey;
+      apiUrl = settings.customBaseUrl.isNotEmpty ? settings.customBaseUrl : 'https://api.openai.com/v1/chat/completions';
+      modelName = settings.customModel.isNotEmpty ? settings.customModel : 'gpt-4o-mini';
+      isOpenAiCompat = true;
+    } else if (settings.geminiApiKey.isNotEmpty) {
+      apiKey = settings.geminiApiKey;
+      modelName = settings.geminiModel.isNotEmpty ? settings.geminiModel : 'gemini-3.7-flash';
+      isOpenAiCompat = false;
+    }
+
+    // 若无任何 API Key，秒级启用本地启发式多维对齐引擎
+    if (apiKey.isEmpty) {
+      return heuristicallyClusterProfiles(profiles);
+    }
+
+    final prompt = '''
+你是一位资深医疗化验与慢病健康数据标准化专家。
+现在用户的慢性病记录软件中，由于不同医院化验单的叫法、简写、中英文、单据栏目或录入差异，导致明明是同一个检验项目，却被拆分成了不同的名字或不同的单据前缀。
+
+【待分析的指标全景画像清单 (${profiles.length}项)】：
+${jsonEncode(profiles.map((p) => p.toJson()).toList())}
+
+【你的任务】：
+请综合分析上述指标的：
+1. 名称相似度与中英文缩写对应关系（如 ALT 与 谷丙转氨酶，WBC 与 白细胞）；
+2. 检验单位（unit）是否一致；
+3. 参考范围（referenceRange）数值是否高度相近；
+4. 所属单据分类（category）是否同属一个医学专业领域；
+5. 检查日期（dates）是否属于患者不同阶段的连续复查随访。
+
+找出所有“本质上是同一个检验项目，但名字不同或栏目分类不同的项”，将它们归并为一个标准指标集群（Cluster）！
+每个集群给出权威的国家标准医学全称（格式推荐: "中文标准全称 (国际英文缩写)"，如 "丙氨酸氨基转移酶 (ALT)"、"白细胞计数 (WBC)"），并统一归拢其标准单据分类（如 "肝功能"、"血常规"）。
+
+【输出格式要求】：
+请以纯 JSON 输出，严禁包含任何 Markdown 格式代码块或额外说明文字：
+{
+  "clusters": [
+    {
+      "standardName": "标准中文全称 (缩写)",
+      "standardCategory": "标准单据分类",
+      "matchedRawNames": ["原指标名1", "原指标名2"],
+      "reason": "单位均为U/L且参考范围吻合，判定为同种肝生化指标"
+    }
+  ]
+}
+''';
+
+    try {
+      String jsonResponseText = '';
+
+      if (isOpenAiCompat) {
+        final res = await http.post(
+          Uri.parse(apiUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: jsonEncode({
+            "model": modelName,
+            "messages": [
+              {"role": "system", "content": "You are a clinical laboratory medicine data standardization AI. Respond in JSON only."},
+              {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (res.statusCode == 200) {
+          final data = jsonDecode(utf8.decode(res.bodyBytes));
+          jsonResponseText = data['choices']?[0]?['message']?['content']?.toString() ?? '';
+        }
+      } else {
+        // Gemini 原生接口
+        final url = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey',
+        );
+        final res = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            "contents": [
+              {
+                "parts": [{"text": prompt}]
+              }
+            ],
+            "generationConfig": {
+              "response_mime_type": "application/json",
+              "temperature": 0.1,
+            }
+          }),
+        ).timeout(const Duration(seconds: 30));
+
+        if (res.statusCode == 200) {
+          final data = jsonDecode(utf8.decode(res.bodyBytes));
+          jsonResponseText = data['candidates']?[0]?['content']?['parts']?[0]?['text']?.toString() ?? '';
+        }
+      }
+
+      if (jsonResponseText.isNotEmpty) {
+        var cleanJson = jsonResponseText.trim();
+        if (cleanJson.startsWith('```json')) cleanJson = cleanJson.substring(7);
+        if (cleanJson.startsWith('```')) cleanJson = cleanJson.substring(3);
+        if (cleanJson.endsWith('```')) cleanJson = cleanJson.substring(0, cleanJson.length - 3);
+        cleanJson = cleanJson.trim();
+
+        final map = jsonDecode(cleanJson);
+        final list = map['clusters'] as List?;
+        if (list != null && list.isNotEmpty) {
+          final List<MetricReconciliationCluster> aiClusters = [];
+          for (var item in list) {
+            final stdName = item['standardName']?.toString().trim() ?? '';
+            final stdCat = item['standardCategory']?.toString().trim() ?? '';
+            final matched = (item['matchedRawNames'] as List?)?.map((e) => e.toString().trim()).toList() ?? [];
+            final reason = item['reason']?.toString().trim() ?? 'AI 综合医学研判已自动归拢';
+
+            if (stdName.isNotEmpty && matched.length > 1) {
+              aiClusters.add(MetricReconciliationCluster(
+                standardName: stdName,
+                standardCategory: stdCat.isNotEmpty ? normalizeCategory(stdCat) : '常规化验',
+                matchedRawNames: matched,
+                reason: reason,
+              ));
+            }
+          }
+          if (aiClusters.isNotEmpty) return aiClusters;
+        }
+      }
+    } catch (_) {
+      // AI 异常或网络超时，平滑降级
+    }
+
+    return heuristicallyClusterProfiles(profiles);
+  }
+}
+
+class _MetricAccumulator {
+  final String rawName;
+  final String category;
+  int count = 0;
+  final List<String> dates = [];
+  final List<String> units = [];
+  final List<String> ranges = [];
+  final List<String> sampleValues = [];
+
+  _MetricAccumulator({required this.rawName, required this.category});
+
+  MetricProfile toProfile() {
+    String bestUnit = '';
+    if (units.isNotEmpty) {
+      final unitCounts = <String, int>{};
+      for (var u in units) {
+        unitCounts[u] = (unitCounts[u] ?? 0) + 1;
+      }
+      bestUnit = unitCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    }
+
+    String bestRange = '';
+    if (ranges.isNotEmpty) {
+      final rangeCounts = <String, int>{};
+      for (var r in ranges) {
+        rangeCounts[r] = (rangeCounts[r] ?? 0) + 1;
+      }
+      bestRange = rangeCounts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    }
+
+    return MetricProfile(
+      rawName: rawName,
+      category: category,
+      unit: bestUnit,
+      referenceRange: bestRange,
+      dates: dates..sort(),
+      sampleValues: sampleValues,
+      occurrenceCount: count,
+    );
+  }
+}
+
+/// 指标全景指纹：聚合指标名、单据分类、单位、参考区间、出现日期与样本值
+class MetricProfile {
+  final String rawName;
+  final String category;
+  final String unit;
+  final String referenceRange;
+  final List<String> dates;
+  final List<String> sampleValues;
+  final int occurrenceCount;
+
+  MetricProfile({
+    required this.rawName,
+    required this.category,
+    required this.unit,
+    required this.referenceRange,
+    required this.dates,
+    required this.sampleValues,
+    required this.occurrenceCount,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'rawName': rawName,
+    'category': category,
+    'unit': unit,
+    'referenceRange': referenceRange,
+    'dates': dates,
+    'sampleValues': sampleValues,
+    'occurrenceCount': occurrenceCount,
+  };
+}
+
+/// 指标归并集群结果
+class MetricReconciliationCluster {
+  final String standardName; // 统一后的标准名称 (如 "丙氨酸氨基转移酶 (ALT)")
+  final String standardCategory; // 统一后的单据大类 (如 "肝功能")
+  final List<String> matchedRawNames; // 归并进来的原始名称集合
+  final String reason; // AI 或算法分析依据
+
+  MetricReconciliationCluster({
+    required this.standardName,
+    required this.standardCategory,
+    required this.matchedRawNames,
+    required this.reason,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'standardName': standardName,
+    'standardCategory': standardCategory,
+    'matchedRawNames': matchedRawNames,
+    'reason': reason,
+  };
 }

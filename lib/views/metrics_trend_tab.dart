@@ -129,25 +129,34 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
           children: [
             Icon(Icons.auto_awesome, color: Colors.blueAccent),
             SizedBox(width: 8),
-            Text('智能指标归拢与标准化'),
+            Text('AI 全局多维指标智能归拢'),
           ],
         ),
-        content: const Text(
-          '系统将利用权威医学知识库与智能引擎，扫描并整理所有历史化验单：\n\n'
-          '1. 将中英文缩写与同义别名统一（如 WBC / 白细胞 统一为 白细胞计数 (WBC)）；\n'
-          '2. 将微小差异的单据名称收敛至规范大类（如“全血细胞分析”统一为“血常规”）；\n'
-          '3. 消除原本分散的同类指标，彻底拼接为连续完整的走势折线图。\n\n'
-          '是否立即执行规范化整理？',
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '系统与 AI 将深度扫描全部复查化验单，综合研判：\n'
+              '• 临床医学含义与中英文别名 (如 ALT 与 谷丙转氨酶)\n'
+              '• 检验单位一致性 (如 U/L、mmol/L、10^9/L)\n'
+              '• 参考区间吻合度 (如 0-40、3.5-9.5)\n'
+              '• 单据大类与病程随访时间线 (如 全血细胞分析 收敛至 血常规)\n\n'
+              'AI 研判完成后将自动统一指标名称与分类，彻底拼接连续走势图。',
+              style: TextStyle(fontSize: 13, height: 1.45),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消'),
           ),
-          ElevatedButton(
+          ElevatedButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.bolt, size: 18, color: Colors.white),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            child: const Text('立即规范化', style: TextStyle(color: Colors.white)),
+            label: const Text('开始智能研判并对齐', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -157,13 +166,82 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
 
     setState(() => _isStandardizing = true);
     try {
-      final modifiedCount = await prov.batchStandardizeRecordsWithAi(settings);
+      final report = await prov.executeSmartMetricReconciliation(settings);
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('🎉 智能归拢完成！已规范并收敛 $modifiedCount 张单据的历史指标，走势已无缝合并！'),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 4),
+        // 展示精美的 AI 归并分析报告
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.verified, color: Colors.green),
+                const SizedBox(width: 8),
+                Text('AI 智能对齐完成 (${report.modifiedRecordsCount}张单据已同步)'),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'AI 已全量扫描 ${report.totalProfilesScanned} 个指标画像。'
+                      '${report.clusters.isEmpty ? '目前所有指标命名均高度规范，无须额外合并！' : '成功识别并收敛了以下指标集群：'}',
+                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 12),
+                    ...report.clusters.map((c) => Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.blueAccent,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(c.standardCategory, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  c.standardName,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text('涵盖原名: ${c.matchedRawNames.join('、')}', style: const TextStyle(fontSize: 12, color: Colors.black87)),
+                          const SizedBox(height: 4),
+                          Text('AI 依据: ${c.reason}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        ],
+                      ),
+                    )),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                child: const Text('我知道了', style: TextStyle(color: Colors.white)),
+              ),
+            ],
           ),
         );
       }
@@ -171,7 +249,7 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('归拢整理遇到异常: $e'),
+            content: Text('AI 归拢遇到异常: $e'),
             backgroundColor: Colors.red,
           ),
         );

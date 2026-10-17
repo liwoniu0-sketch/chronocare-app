@@ -55,7 +55,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
         with:
           tag_name: ${{ github.ref_name }}
-          name: ChronoCare ${{ github.ref_name }} 智能医学同义词对齐·AI同类指标智能归拢合并版
+          name: ChronoCare ${{ github.ref_name }} AI多维指标智能归拢对齐·同义指标自动合并版
           body_path: assets/version.json
           files: |
             chronocare-release.apk
