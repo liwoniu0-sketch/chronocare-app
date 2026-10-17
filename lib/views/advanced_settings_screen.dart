@@ -28,6 +28,7 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
 
   late TextEditingController _ocrSpaceKeyCtrl;
   late TextEditingController _systemPromptCtrl;
+  late TextEditingController _reconciliationPromptCtrl;
 
   @override
   void initState() {
@@ -51,6 +52,7 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
 
     _ocrSpaceKeyCtrl = TextEditingController(text: s.ocrSpaceApiKey);
     _systemPromptCtrl = TextEditingController(text: s.customSystemPrompt);
+    _reconciliationPromptCtrl = TextEditingController(text: s.aiReconciliationPrompt);
   }
 
   @override
@@ -69,6 +71,7 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
     _customBaseUrlCtrl.dispose();
     _ocrSpaceKeyCtrl.dispose();
     _systemPromptCtrl.dispose();
+    _reconciliationPromptCtrl.dispose();
     super.dispose();
   }
 
@@ -268,6 +271,16 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
                       Text(s.aiTemperature.toStringAsFixed(1)),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _reconciliationPromptCtrl,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'AI 多维指标智能归拢与合并提示词 (留空为默认规则)',
+                      hintText: '当 AI 误合并或未识别时可在此自定义指令规则，留空则使用内置严格医学防误合模板...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -328,6 +341,7 @@ class _AdvancedSettingsScreenState extends State<AdvancedSettingsScreen> {
 
     s.ocrSpaceApiKey = _ocrSpaceKeyCtrl.text.trim();
     s.customSystemPrompt = _systemPromptCtrl.text.trim();
+    s.aiReconciliationPrompt = _reconciliationPromptCtrl.text.trim();
 
     prov.updateSettings(s);
     ScaffoldMessenger.of(context).showSnackBar(

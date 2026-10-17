@@ -22,6 +22,7 @@ class AppSettings {
   double aiTemperature;
   int aiMaxTokens;
   String customSystemPrompt;
+  String aiReconciliationPrompt; // 自定义 AI 多维指标归拢与合并提示词 (空则使用系统默认)
 
   // --- OCR 配置 ---
   String ocrEngine; // 'gemini_vision'(默认), 'mlkit_local', 'ocr_space', 'custom_ocr'
@@ -90,6 +91,7 @@ class AppSettings {
     this.aiTemperature = 0.2,
     this.aiMaxTokens = 4096,
     this.customSystemPrompt = '',
+    this.aiReconciliationPrompt = '',
     this.ocrEngine = 'gemini_vision',
     this.ocrSpaceApiKey = 'K88888888888957',
     this.ocrAutoRotate = true,
@@ -144,6 +146,7 @@ class AppSettings {
       'aiTemperature': aiTemperature,
       'aiMaxTokens': aiMaxTokens,
       'customSystemPrompt': customSystemPrompt,
+      'aiReconciliationPrompt': aiReconciliationPrompt,
       'ocrEngine': ocrEngine,
       'ocrSpaceApiKey': ocrSpaceApiKey,
       'ocrAutoRotate': ocrAutoRotate,
@@ -209,6 +212,7 @@ class AppSettings {
       aiTemperature: (map['aiTemperature'] is num) ? (map['aiTemperature'] as num).toDouble() : 0.2,
       aiMaxTokens: map['aiMaxTokens'] ?? 4096,
       customSystemPrompt: map['customSystemPrompt'] ?? '',
+      aiReconciliationPrompt: map['aiReconciliationPrompt'] ?? '',
       ocrEngine: map['ocrEngine'] ?? 'gemini_vision',
       ocrSpaceApiKey: map['ocrSpaceApiKey'] ?? 'K88888888888957',
       ocrAutoRotate: map['ocrAutoRotate'] ?? true,

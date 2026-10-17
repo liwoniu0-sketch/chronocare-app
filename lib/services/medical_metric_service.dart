@@ -647,52 +647,289 @@ ${jsonEncode(distinctNames)}
     return clusters;
   }
 
-  /// 综合研判两个指标画像是否为同一指标变体 (名称亲缘 + 单位一致 + 参考区间重合 + 栏目兼容)
+  /// 默认 AI 归拢提示词模板 (内置极度严苛的临床医学防误合铁律)
+  static const String defaultReconciliationPromptTemplate = '''你是一位资深临床检验医学与慢病健康数据标准化权威专家。
+现在用户的慢性病记录软件中，由于不同医院化验单的叫法、简写、中英文、单据栏目或录入差异，导致明明是同一个检验项目，却被拆分成了不同的名字或不同的单据前缀。
+
+【待分析的指标全景画像清单】：
+{{PROFILES_JSON}}
+
+【⚠️ 核心医学判别最高红线（违背将导致医疗数据灾难，必须 100% 严格遵守）】：
+1. 绝对严禁仅凭“单位相同”或“参考范围相近”就把不同项目混在一起！
+   - 例如在生化全套中：谷丙转氨酶(ALT)、谷草转氨酶(AST)、碱性磷酸酶(ALP)、谷氨酰转肽酶(GGT)，它们的检验单位都是 U/L，参考范围也都在几十以内，但它们是完全不同的肝功能生化酶，绝对禁止合并！
+   - 又如在电解质中：血钾(K+)、血钠(Na+)、血氯(Cl-)、二氧化碳结合力，单位都是 mmol/L，但它们是完全不同的化学元素与指标，绝对禁止合并！
+   - 又如：肌酐(Cr) 与 尿酸(UA)、总胆固醇(TC) 与 甘油三酯(TG)、总胆红素(TBIL) 与 直接胆红素(DBIL)，绝对禁止合并！
+2. 绝对严禁将“绝对计数”与“百分比”合并！
+   - 例如：淋巴细胞百分比 (LYMPH%，单位%) 与 淋巴细胞绝对计数 (LYMPH#，单位 10^9/L) 是两个完全不同的临床观测值，绝对禁止合并！
+   - 中性粒细胞百分比(NEUT%) 与 中性粒细胞绝对计数(NEUT#) 绝对禁止合并！单核、嗜酸、嗜碱细胞同理！
+3. 绝对严禁将不同体液样本的项目合并！
+   - 尿白细胞 与 血液白细胞 绝对禁止合并！尿蛋白 与 血清总蛋白 绝对禁止合并！尿糖 与 血糖 绝对禁止合并！
+
+【✅ 什么是合法允许合并的项目（同义/变体归拢）】：
+仅当两个项目在临床医学上【证实为同一种检验物质】，仅仅是因为以下原因被拆分时才允许合并：
+1. 医院叫法或简写差异：如“谷丙转氨酶” vs “丙氨酸氨基转移酶” vs “ALT”；
+2. 规范全称与简称：如“白细胞” vs “白细胞计数” vs “全血白细胞” vs “WBC”；
+3. 单据栏目前缀差异：如“[全血细胞分析] 白细胞” vs “[血常规] 白细胞”；
+4. 中英文差异：如“甘油三酯” vs “TG” vs “Triglycerides”。
+且两者的单位量纲属性必须完全兼容（不可一个绝对值一个百分比），参考范围数量级相符。
+
+【你的输出格式要求】：
+请以纯 JSON 输出，严禁包含任何 Markdown 格式代码块（勿带 ```json）或额外说明文字：
+{
+  "clusters": [
+    {
+      "standardName": "标准中文全称 (国际缩写)",
+      "standardCategory": "标准单据分类",
+      "matchedRawNames": ["原指标名1", "原指标名2"],
+      "reason": "临床证实为同一种检验物质(如ALT)，仅医院简称与全称叫法差异"
+    }
+  ]
+}''';
+
+  /// 构造最终发给 AI 的完整提示词
+  String buildReconciliationPrompt(List<MetricProfile> profiles, {String? customTemplate}) {
+    final template = (customTemplate != null && customTemplate.trim().isNotEmpty)
+        ? customTemplate.trim()
+        : defaultReconciliationPromptTemplate;
+
+    final jsonStr = jsonEncode(profiles.map((p) => p.toJson()).toList());
+    if (template.contains('{{PROFILES_JSON}}')) {
+      return template.replaceAll('{{PROFILES_JSON}}', jsonStr);
+    } else {
+      return '$template\n\n【待分析的指标全景画像清单】：\n$jsonStr';
+    }
+  }
+
+  /// 综合研判两个指标画像是否为同一指标变体 (严格层级门禁：医学本质一票否决制)
   bool _isProfileSimilar(MetricProfile a, MetricProfile b) {
-    // 1. 单位比对：若两者都有单位且完全不同（如 g/L vs 10^9/L），直接否决
-    final uA = _cleanUnit(a.unit);
-    final uB = _cleanUnit(b.unit);
-    if (uA.isNotEmpty && uB.isNotEmpty && uA != uB) {
+    // 门禁 0：体液大类强隔离 (尿 vs 血/其他)
+    final isUrineA = _isUrineCategory(a.category, a.rawName);
+    final isUrineB = _isUrineCategory(b.category, b.rawName);
+    if (isUrineA != isUrineB) {
       return false;
     }
 
-    // 2. 名称比对
+    // 门禁 1：百分比 vs 绝对计数强隔离
+    final isPercentA = _isPercentageMetric(a.rawName, a.unit);
+    final isPercentB = _isPercentageMetric(b.rawName, b.unit);
+    if (isPercentA != isPercentB) {
+      return false; // 百分比与绝对值绝不合并
+    }
+
+    // 门禁 2：已知不同临床指标互斥一票否决 (如 ALT vs AST, 钾 vs 钠)
+    if (_areKnownMutuallyExclusive(a.rawName, b.rawName)) {
+      return false;
+    }
+
+    // 门禁 3：名称医学本质相似度核心门禁 (核心一票否决)
     final nA = _cleanName(a.rawName);
     final nB = _cleanName(b.rawName);
     if (nA.isEmpty || nB.isEmpty) return false;
 
-    double nameScore = 0.0;
+    bool nameMatch = false;
     if (nA == nB) {
-      nameScore = 1.0;
-    } else if (nA.contains(nB) || nB.contains(nA)) {
-      final minLen = nA.length < nB.length ? nA.length : nB.length;
-      nameScore = minLen >= 2 ? 0.85 : 0.5;
+      nameMatch = true;
     } else {
-      final lcs = _longestCommonSubstringLength(nA, nB);
-      nameScore = (2.0 * lcs) / (nA.length + nB.length);
+      final stdA = findStandardMetric(a.rawName, category: a.category);
+      final stdB = findStandardMetric(b.rawName, category: b.category);
+      if (stdA != null && stdB != null && stdA.standardName == stdB.standardName) {
+        nameMatch = true;
+      } else {
+        nameMatch = _isNameVariantByModifiers(nA, nB);
+      }
     }
 
-    // 3. 参考范围比对
-    double rangeScore = 0.5;
+    // 🔴 核心铁律：若名称在医学上不构成同义变体，不管单位和参考值多么相同，一票否决！
+    if (!nameMatch) {
+      return false;
+    }
+
+    // 门禁 4：单位一致性核验（反向过滤，防止同名同字但在不同计量维度）
+    final uA = _cleanUnit(a.unit);
+    final uB = _cleanUnit(b.unit);
+    if (uA.isNotEmpty && uB.isNotEmpty && uA != uB) {
+      if (!_areUnitsCompatible(uA, uB)) {
+        return false;
+      }
+    }
+
+    // 门禁 5：参考范围数量级冲突核验（反向过滤）
     if (a.referenceRange.isNotEmpty && b.referenceRange.isNotEmpty) {
       final rA = _extractRange(a.referenceRange);
       final rB = _extractRange(b.referenceRange);
       if (rA != null && rB != null) {
-        final overlap = _rangeOverlapRatio(rA.$1, rA.$2, rB.$1, rB.$2);
-        rangeScore = overlap;
+        final midA = (rA.$1 + rA.$2) / 2.0;
+        final midB = (rB.$1 + rB.$2) / 2.0;
+        if (midA > 0 && midB > 0) {
+          final ratio = midA > midB ? midA / midB : midB / midA;
+          if (ratio > 5.0) {
+            return false;
+          }
+        }
       }
     }
 
-    // 4. 单据类别兼容度
-    final catA = normalizeCategory(a.category);
-    final catB = normalizeCategory(b.category);
-    final catScore = (catA == catB || catA.contains(catB) || catB.contains(catA)) ? 1.0 : 0.4;
+    return true;
+  }
 
-    final unitScore = (uA.isNotEmpty && uB.isNotEmpty && uA == uB) ? 1.0 : 0.6;
+  bool _isUrineCategory(String category, String rawName) {
+    final c = category.toLowerCase();
+    final n = rawName.toLowerCase();
+    return c.contains('尿') || n.startsWith('尿') || n.contains('尿常规');
+  }
 
-    // 综合加权得分
-    final totalScore = nameScore * 0.45 + unitScore * 0.25 + rangeScore * 0.20 + catScore * 0.10;
-    return totalScore >= 0.72;
+  bool _isPercentageMetric(String rawName, String unit) {
+    final u = unit.toLowerCase();
+    final n = rawName.toLowerCase();
+    if (u.contains('%') || u.contains('百分比') || u.contains('percent')) return true;
+    if (n.contains('%') || n.contains('百分比') || n.contains('百分率') || n.contains('比率') || n.contains('比值') || n.contains('ratio') || n.contains('pct')) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _areKnownMutuallyExclusive(String nameA, String nameB) {
+    final a = _cleanName(nameA);
+    final b = _cleanName(nameB);
+    if (a == b) return false;
+
+    // 肝酶组互斥
+    const liverEnzymes = ['alt', 'ast', 'alp', 'ggt', 'ldh', '谷丙', '谷草', '碱性磷酸酶', '转肽酶', '乳酸脱氢酶'];
+    for (int i = 0; i < liverEnzymes.length; i++) {
+      for (int j = i + 1; j < liverEnzymes.length; j++) {
+        final k1 = liverEnzymes[i];
+        final k2 = liverEnzymes[j];
+        if ((a.contains(k1) && b.contains(k2)) || (a.contains(k2) && b.contains(k1))) {
+          return true;
+        }
+      }
+    }
+
+    // 电解质组互斥
+    const electrolytes = [
+      ['钾', 'k'],
+      ['钠', 'na'],
+      ['氯', 'cl'],
+      ['钙', 'ca'],
+      ['镁', 'mg'],
+      ['磷', 'p', 'phos']
+    ];
+    for (int i = 0; i < electrolytes.length; i++) {
+      for (int j = i + 1; j < electrolytes.length; j++) {
+        final g1 = electrolytes[i];
+        final g2 = electrolytes[j];
+        bool hasG1(String s) => g1.any((k) => s == k || s.contains(k));
+        bool hasG2(String s) => g2.any((k) => s == k || s.contains(k));
+        if ((hasG1(a) && hasG2(b)) || (hasG1(b) && hasG2(a))) {
+          return true;
+        }
+      }
+    }
+
+    // 脂类互斥
+    const lipids = [
+      ['总胆固醇', 'tc', 'chol'],
+      ['甘油三酯', 'tg', 'trig'],
+      ['高密度', 'hdl'],
+      ['低密度', 'ldl']
+    ];
+    for (int i = 0; i < lipids.length; i++) {
+      for (int j = i + 1; j < lipids.length; j++) {
+        final g1 = lipids[i];
+        final g2 = lipids[j];
+        bool hasG1(String s) => g1.any((k) => s.contains(k));
+        bool hasG2(String s) => g2.any((k) => s.contains(k));
+        if ((hasG1(a) && hasG2(b)) || (hasG1(b) && hasG2(a))) {
+          return true;
+        }
+      }
+    }
+
+    // 肾功互斥
+    const renal = [
+      ['肌酐', 'cr', 'crea'],
+      ['尿酸', 'ua', 'uric'],
+      ['尿素', 'ure', 'bun']
+    ];
+    for (int i = 0; i < renal.length; i++) {
+      for (int j = i + 1; j < renal.length; j++) {
+        final g1 = renal[i];
+        final g2 = renal[j];
+        bool hasG1(String s) => g1.any((k) => s.contains(k));
+        bool hasG2(String s) => g2.any((k) => s.contains(k));
+        if ((hasG1(a) && hasG2(b)) || (hasG1(b) && hasG2(a))) {
+          return true;
+        }
+      }
+    }
+
+    // 血细胞大类互斥
+    const bloodCells = [
+      ['白细胞', 'wbc'],
+      ['红细胞', 'rbc'],
+      ['血小板', 'plt'],
+      ['血红蛋白', 'hb', 'hgb'],
+      ['淋巴细胞', 'lymph'],
+      ['中性粒细胞', 'neut'],
+      ['单核细胞', 'mono'],
+      ['嗜酸', 'eos'],
+      ['嗜碱', 'baso']
+    ];
+    for (int i = 0; i < bloodCells.length; i++) {
+      for (int j = i + 1; j < bloodCells.length; j++) {
+        final g1 = bloodCells[i];
+        final g2 = bloodCells[j];
+        bool hasG1(String s) => g1.any((k) => s.contains(k));
+        bool hasG2(String s) => g2.any((k) => s.contains(k));
+        if ((hasG1(a) && hasG2(b)) || (hasG1(b) && hasG2(a))) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  bool _isNameVariantByModifiers(String nA, String nB) {
+    final longStr = nA.length >= nB.length ? nA : nB;
+    final shortStr = nA.length < nB.length ? nA : nB;
+
+    if (!longStr.contains(shortStr)) return false;
+    if (shortStr.length < 2) return false;
+
+    // 剔除 shortStr 后的剩余部分
+    final remainder = longStr.replaceFirst(shortStr, '');
+    if (remainder.isEmpty) return true;
+
+    // 检查剩余部分是否全部由无害医学修饰词组成
+    const allowedModifiers = [
+      '计数', '测定', '分析', '全血', '血清', '血浆', '空腹', '餐后', '绝对值', '总',
+      '含量', '水平', '浓度', '检验', '定量', '常规', '五分类', '三分类', '项目', '检查',
+      '比值', '比率'
+    ];
+
+    String testStr = remainder;
+    for (var mod in allowedModifiers) {
+      testStr = testStr.replaceAll(mod, '');
+    }
+    testStr = testStr.replaceAll(RegExp(r'[\d\+\-\*\#\s]'), '');
+    return testStr.isEmpty;
+  }
+
+  bool _areUnitsCompatible(String uA, String uB) {
+    if (uA == uB) return true;
+    final cA = uA.replaceAll(' ', '').replaceAll('／', '/').replaceAll('^', '').replaceAll('*', '');
+    final cB = uB.replaceAll(' ', '').replaceAll('／', '/').replaceAll('^', '').replaceAll('*', '');
+    if (cA == cB) return true;
+
+    if ((cA.contains('109/l') || cA.contains('10e9/l') || cA == 'g/l') &&
+        (cB.contains('109/l') || cB.contains('10e9/l') || cB == 'g/l')) {
+      return true;
+    }
+    if ((cA == 'u/l' || cA == 'iu/l') && (cB == 'u/l' || cB == 'iu/l')) {
+      return true;
+    }
+    return false;
   }
 
   String _cleanUnit(String unit) {
@@ -701,26 +938,10 @@ ${jsonEncode(distinctNames)}
 
   String _cleanName(String name) {
     var s = name.trim().toLowerCase();
-    // 移除中括号或前缀
     if (s.startsWith('[') && s.contains(']')) {
       s = s.substring(s.indexOf(']') + 1).trim();
     }
     return s.replaceAll(RegExp(r'[\(\)（）\s_\-\#\%]'), '');
-  }
-
-  int _longestCommonSubstringLength(String s1, String s2) {
-    if (s1.isEmpty || s2.isEmpty) return 0;
-    int maxLen = 0;
-    for (int i = 0; i < s1.length; i++) {
-      for (int j = 0; j < s2.length; j++) {
-        int len = 0;
-        while (i + len < s1.length && j + len < s2.length && s1[i + len] == s2[j + len]) {
-          len++;
-        }
-        if (len > maxLen) maxLen = len;
-      }
-    }
-    return maxLen;
   }
 
   (double, double)? _extractRange(String refStr) {
@@ -731,17 +952,6 @@ ${jsonEncode(distinctNames)}
       return (min, max);
     }
     return null;
-  }
-
-  double _rangeOverlapRatio(double minA, double maxA, double minB, double maxB) {
-    final start = minA > minB ? minA : minB;
-    final end = maxA < maxB ? maxA : maxB;
-    if (end <= start) return 0.0;
-    final overlap = end - start;
-    final unionStart = minA < minB ? minA : minB;
-    final unionEnd = maxA > maxB ? maxA : maxB;
-    final union = unionEnd - unionStart;
-    return union > 0 ? (overlap / union) : 0.0;
   }
 
   /// AI 驱动的全局多维指标对齐中枢 (支持 Gemini / DeepSeek / OpenAI / 自定义 API，若无 Key 则自动降级为启发式引擎)
@@ -783,37 +993,11 @@ ${jsonEncode(distinctNames)}
       return heuristicallyClusterProfiles(profiles);
     }
 
-    final prompt = '''
-你是一位资深医疗化验与慢病健康数据标准化专家。
-现在用户的慢性病记录软件中，由于不同医院化验单的叫法、简写、中英文、单据栏目或录入差异，导致明明是同一个检验项目，却被拆分成了不同的名字或不同的单据前缀。
-
-【待分析的指标全景画像清单 (${profiles.length}项)】：
-${jsonEncode(profiles.map((p) => p.toJson()).toList())}
-
-【你的任务】：
-请综合分析上述指标的：
-1. 名称相似度与中英文缩写对应关系（如 ALT 与 谷丙转氨酶，WBC 与 白细胞）；
-2. 检验单位（unit）是否一致；
-3. 参考范围（referenceRange）数值是否高度相近；
-4. 所属单据分类（category）是否同属一个医学专业领域；
-5. 检查日期（dates）是否属于患者不同阶段的连续复查随访。
-
-找出所有“本质上是同一个检验项目，但名字不同或栏目分类不同的项”，将它们归并为一个标准指标集群（Cluster）！
-每个集群给出权威的国家标准医学全称（格式推荐: "中文标准全称 (国际英文缩写)"，如 "丙氨酸氨基转移酶 (ALT)"、"白细胞计数 (WBC)"），并统一归拢其标准单据分类（如 "肝功能"、"血常规"）。
-
-【输出格式要求】：
-请以纯 JSON 输出，严禁包含任何 Markdown 格式代码块或额外说明文字：
-{
-  "clusters": [
-    {
-      "standardName": "标准中文全称 (缩写)",
-      "standardCategory": "标准单据分类",
-      "matchedRawNames": ["原指标名1", "原指标名2"],
-      "reason": "单位均为U/L且参考范围吻合，判定为同种肝生化指标"
-    }
-  ]
-}
-''';
+    // 构造提示词 (优先使用用户在设置或弹窗中自定义的 Prompt 模板)
+    final prompt = buildReconciliationPrompt(
+      profiles,
+      customTemplate: settings.aiReconciliationPrompt,
+    );
 
     try {
       String jsonResponseText = '';

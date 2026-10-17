@@ -118,55 +118,217 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
     return null;
   }
 
-  Future<void> _runAiStandardization(BuildContext context) async {
-    final prov = Provider.of<RecordsProvider>(context, listen: false);
-    final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+  Future<void> _showPromptEditorDialog(BuildContext context) async {
+    final settingsProv = Provider.of<SettingsProvider>(context, listen: false);
+    final currentCustomPrompt = settingsProv.settings.aiReconciliationPrompt;
+    final initialText = currentCustomPrompt.trim().isNotEmpty
+        ? currentCustomPrompt
+        : MedicalMetricService.defaultReconciliationPromptTemplate;
 
-    final confirm = await showDialog<bool>(
+    final controller = TextEditingController(text: initialText);
+
+    await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.auto_awesome, color: Colors.blueAccent),
+            Icon(Icons.tune, color: Colors.blueAccent),
             SizedBox(width: 8),
-            Text('AI 全局多维指标智能归拢'),
+            Text('编辑 AI 指标归拢提示词', style: TextStyle(fontSize: 17)),
           ],
         ),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '系统与 AI 将深度扫描全部复查化验单，综合研判：\n'
-              '• 临床医学含义与中英文别名 (如 ALT 与 谷丙转氨酶)\n'
-              '• 检验单位一致性 (如 U/L、mmol/L、10^9/L)\n'
-              '• 参考区间吻合度 (如 0-40、3.5-9.5)\n'
-              '• 单据大类与病程随访时间线 (如 全血细胞分析 收敛至 血常规)\n\n'
-              'AI 研判完成后将自动统一指标名称与分类，彻底拼接连续走势图。',
-              style: TextStyle(fontSize: 13, height: 1.45),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.withOpacity(0.2)),
+                  ),
+                  child: const Text(
+                    '💡 当大模型对某些医院的特殊项目理解不准确、或发生误合并时，您可在此直接手动修改下发给 AI 的研判提示词规则（支持添加专属指令）。系统将 100% 遵照您的提示词执行。',
+                    style: TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'AI 提示词内容 (可用 {{PROFILES_JSON}} 标记指标数据位置)：',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: controller,
+                  maxLines: 14,
+                  style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    contentPadding: const EdgeInsets.all(10),
+                    hintText: '输入自定义 AI 提示词...',
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () async {
+              controller.text = MedicalMetricService.defaultReconciliationPromptTemplate;
+              final s = settingsProv.settings;
+              s.aiReconciliationPrompt = '';
+              await settingsProv.updateSettings(s);
+              if (ctx.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('已恢复系统默认严格医学提示词模板')),
+                );
+              }
+            },
+            child: const Text('恢复系统默认', style: TextStyle(color: Colors.orange)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('取消'),
           ),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.bolt, size: 18, color: Colors.white),
+          ElevatedButton(
+            onPressed: () async {
+              final newPrompt = controller.text.trim();
+              final s = settingsProv.settings;
+              s.aiReconciliationPrompt = newPrompt;
+              await settingsProv.updateSettings(s);
+              if (ctx.mounted) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('自定义 AI 归拢提示词已保存生效！')),
+                );
+              }
+            },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            label: const Text('开始智能研判并对齐', style: TextStyle(color: Colors.white)),
+            child: const Text('保存并应用', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _runAiStandardization(BuildContext context) async {
+    final prov = Provider.of<RecordsProvider>(context, listen: false);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final currentSettings = Provider.of<SettingsProvider>(context).settings;
+            final hasCustomPrompt = currentSettings.aiReconciliationPrompt.trim().isNotEmpty;
+
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.auto_awesome, color: Colors.blueAccent),
+                  SizedBox(width: 8),
+                  Text('AI 全局多维指标智能归拢'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '系统与 AI 将深度扫描全部复查化验单，综合研判：\n'
+                    '• 临床医学含义与中英文别名 (如 ALT 与 谷丙转氨酶)\n'
+                    '• 检验单位一致性 (严格防混淆：绝对值与百分比严禁合并)\n'
+                    '• 参考区间吻合度 (排除量级相差悬殊的非同类项目)\n'
+                    '• 单据大类与病程随访时间线 (如 全血细胞分析 收敛至 血常规)\n\n'
+                    'AI 研判完成后将自动统一指标名称与分类，彻底拼接连续走势图。',
+                    style: TextStyle(fontSize: 13, height: 1.45),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: hasCustomPrompt ? Colors.purple.withOpacity(0.08) : Colors.green.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: hasCustomPrompt ? Colors.purple.withOpacity(0.3) : Colors.green.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          hasCustomPrompt ? Icons.tune : Icons.shield_outlined,
+                          size: 18,
+                          color: hasCustomPrompt ? Colors.purple : Colors.green,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            hasCustomPrompt ? '当前规则：已启用用户自定义 AI 提示词' : '当前规则：已启用严格医学防误合默认规则',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: hasCustomPrompt ? Colors.purple.shade700 : Colors.green.shade800,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () async {
+                      await _showPromptEditorDialog(context);
+                      setDialogState(() {});
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.edit_note, size: 18, color: Colors.blueAccent),
+                          SizedBox(width: 6),
+                          Text(
+                            '自定义 / 编辑 AI 提示词规则',
+                            style: TextStyle(fontSize: 13, color: Colors.blueAccent, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('取消'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  icon: const Icon(Icons.bolt, size: 18, color: Colors.white),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                  label: const Text('开始智能研判并对齐', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
     if (confirm != true) return;
 
     setState(() => _isStandardizing = true);
     try {
-      final report = await prov.executeSmartMetricReconciliation(settings);
+      final latestSettings = Provider.of<SettingsProvider>(context, listen: false).settings;
+      final report = await prov.executeSmartMetricReconciliation(latestSettings);
 
       if (mounted) {
         // 展示精美的 AI 归并分析报告
