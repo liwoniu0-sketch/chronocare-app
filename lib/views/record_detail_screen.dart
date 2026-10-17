@@ -8,17 +8,21 @@ import '../providers/settings_provider.dart';
 import '../models/record.dart';
 import '../models/check_item.dart';
 import '../services/ai_service.dart';
+import '../services/image_storage_service.dart';
 import 'record_edit_screen.dart';
 import 'photo_gallery_viewer.dart';
+import 'metrics_trend_tab.dart';
 
 class RecordDetailScreen extends StatefulWidget {
   final String recordId;
   final String? initialCategory; // 允许从指标走势等外部页面直接定位跳转到对应的检查单据栏目
+  final String? highlightItemName; // 允许从时间轴等外部页面精确定位并高亮指定的化验指标
 
   const RecordDetailScreen({
     super.key,
     required this.recordId,
     this.initialCategory,
+    this.highlightItemName,
   });
 
   @override
@@ -32,6 +36,8 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   late PageController _imagePageController;
   int _currentImageIndex = 0;
   bool _hasAppliedInitialCategory = false;
+  bool _hasScrolledToHighlight = false;
+  final GlobalKey _highlightItemKey = GlobalKey();
 
   @override
   void initState() {
@@ -81,12 +87,27 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
       ...categorizedItems.keys,
     ];
 
-    // 如果传入了初始检查栏目，则优先定位选中该栏目
-    if (!_hasAppliedInitialCategory && widget.initialCategory != null && widget.initialCategory!.isNotEmpty) {
-      final targetCat = widget.initialCategory!.trim();
-      final catIdx = categoryNames.indexOf(targetCat);
-      if (catIdx >= 0) {
-        _selectedCategoryIndex = catIdx;
+    // 如果传入了初始检查栏目或指定高亮指标，则优先定位选中对应的单据栏目
+    if (!_hasAppliedInitialCategory) {
+      String? targetCat = widget.initialCategory?.trim();
+      if ((targetCat == null || targetCat.isEmpty) && widget.highlightItemName != null && widget.highlightItemName!.isNotEmpty) {
+        // 根据 highlightItemName 自动推断所属栏目
+        for (var item in record.items) {
+          if (item.itemName.trim() == widget.highlightItemName!.trim()) {
+            final c = item.category.trim();
+            if (c.isNotEmpty) {
+              targetCat = c;
+              break;
+            }
+          }
+        }
+      }
+
+      if (targetCat != null && targetCat.isNotEmpty) {
+        final catIdx = categoryNames.indexOf(targetCat);
+        if (catIdx >= 0) {
+          _selectedCategoryIndex = catIdx;
+        }
       }
       _hasAppliedInitialCategory = true;
     }
@@ -97,6 +118,23 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
 
     final currentCategory = categoryNames.isNotEmpty ? categoryNames[_selectedCategoryIndex] : '常规化验';
     final currentItems = (currentCategory == '全部指标') ? record.items : (categorizedItems[currentCategory] ?? []);
+
+    // 时间轴点击指标跳转过来后，自动平滑滚动直达该指标在档案内的具体位置
+    if (!_hasScrolledToHighlight && widget.highlightItemName != null && widget.highlightItemName!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted && _highlightItemKey.currentContext != null) {
+            Scrollable.ensureVisible(
+              _highlightItemKey.currentContext!,
+              duration: const Duration(milliseconds: 500),
+              curve: Curves.easeInOutCubic,
+              alignment: 0.3,
+            );
+            _hasScrolledToHighlight = true;
+          }
+        });
+      });
+    }
 
     // 2. 构建图片路径 -> 对应栏目名称映射 (用于左右滑动无缝联动切换)
     final Map<String, String> imageCategoryMap = {};
@@ -492,7 +530,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                                 },
                                 itemBuilder: (ctx, imgIdx) {
                                   final imgPath = record.imagePaths[imgIdx];
-                                  final imgFile = File(imgPath);
+                                  final imgFile = ImageStorageService.instance.resolveImageFileSync(imgPath);
                                   return GestureDetector(
                                     onTap: () {
                                       Navigator.push(
@@ -666,7 +704,14 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                         separatorBuilder: (c, i) => Divider(height: 1, color: isDark ? const Color(0xFF334155) : Colors.grey.shade200),
                         itemBuilder: (c, itemIdx) {
                           final item = currentItems[itemIdx];
-                          return _buildCheckItemRow(item, isDark);
+                          final isTarget = widget.highlightItemName != null &&
+                              item.itemName.trim() == widget.highlightItemName!.trim();
+                          return _buildCheckItemRow(
+                            item,
+                            isDark,
+                            isHighlighted: isTarget,
+                            key: isTarget ? _highlightItemKey : null,
+                          );
                         },
                       ),
                     ],
@@ -725,60 +770,199 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     );
   }
 
-  Widget _buildCheckItemRow(CheckItem item, bool isDark) {
+  Widget _buildCheckItemRow(
+    CheckItem item,
+    bool isDark, {
+    bool isHighlighted = false,
+    Key? key,
+  }) {
     final isAbnormal = item.status != 'normal';
     final refText = item.referenceRange.isNotEmpty ? item.referenceRange : '未注明';
     final noteText = item.notes.isNotEmpty ? ' · ${item.notes}' : '';
     final arrow = isAbnormal ? (item.status == 'high' ? ' ↑' : ' ↓') : '';
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            flex: 4,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.itemName,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                Text(
-                  '参考值: $refText$noteText',
-                  style: TextStyle(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : Colors.grey.shade600),
+    return Container(
+      key: key,
+      margin: isHighlighted ? const EdgeInsets.symmetric(vertical: 4) : EdgeInsets.zero,
+      padding: isHighlighted
+          ? const EdgeInsets.symmetric(horizontal: 10, vertical: 8)
+          : const EdgeInsets.symmetric(vertical: 8.0),
+      decoration: isHighlighted
+          ? BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF0369A1).withOpacity(0.3)
+                  : Colors.amber.shade50.withOpacity(0.8),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isDark ? const Color(0xFF38BDF8) : Colors.amber.shade700,
+                width: 1.8,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: (isDark ? const Color(0xFF38BDF8) : Colors.amber.shade400).withOpacity(0.2),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
                 ),
               ],
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isAbnormal
-                      ? (isDark ? const Color(0xFF881337).withOpacity(0.5) : Colors.red.shade50)
-                      : (isDark ? const Color(0xFF1E3A5F).withOpacity(0.5) : Colors.green.shade50),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: isAbnormal ? const Color(0xFFF43F5E) : const Color(0xFF10B981),
+            )
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isHighlighted)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF0284C7) : Colors.amber.shade600,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.location_on, size: 10, color: Colors.white),
+                        SizedBox(width: 2),
+                        Text(
+                          '时间轴定位指标',
+                          style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
                   ),
+                ],
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // 约束可点击范围 1: 指标名称与走势胶囊（带水波纹 InkWell，点击直接跳转走势）
+              Expanded(
+                flex: 4,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => MetricsTrendTab(initialItemName: item.itemName),
+                          ),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                item.itemName,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                  color: isHighlighted
+                                      ? (isDark ? const Color(0xFF38BDF8) : Colors.amber.shade900)
+                                      : (isDark ? const Color(0xFFF1F5F9) : Colors.black87),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(isDark ? 0.25 : 0.12),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.show_chart, size: 11, color: isDark ? const Color(0xFF38BDF8) : Colors.blue.shade700),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    '走势',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: isDark ? const Color(0xFF38BDF8) : Colors.blue.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    // 参考值文本区域（纯展示，不响应点击，避免长按/滑动手势冲突）
+                    Padding(
+                      padding: const EdgeInsets.only(left: 2, top: 2),
+                      child: Text(
+                        '参考值: $refText$noteText',
+                        style: TextStyle(fontSize: 11, color: isDark ? const Color(0xFF94A3B8) : Colors.grey.shade600),
+                      ),
+                    ),
+                  ],
                 ),
-                child: Text(
-                  '${item.value} ${item.unit}$arrow',
-                  style: TextStyle(
-                    color: isAbnormal
-                        ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade700)
-                        : (isDark ? const Color(0xFF6EE7B7) : Colors.green.shade800),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
+              ),
+              // 约束可点击范围 2: 右侧指标数值徽章胶囊（点击同样跳转走势）
+              Expanded(
+                flex: 3,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MetricsTrendTab(initialItemName: item.itemName),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isAbnormal
+                            ? (isDark ? const Color(0xFF881337).withOpacity(0.5) : Colors.red.shade50)
+                            : (isDark ? const Color(0xFF1E3A5F).withOpacity(0.5) : Colors.green.shade50),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: isAbnormal ? const Color(0xFFF43F5E) : const Color(0xFF10B981),
+                        ),
+                      ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '${item.value} ${item.unit}$arrow',
+                            style: TextStyle(
+                              color: isAbnormal
+                                  ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade700)
+                                  : (isDark ? const Color(0xFF6EE7B7) : Colors.green.shade800),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(width: 3),
+                          Icon(
+                            Icons.chevron_right,
+                            size: 14,
+                            color: isAbnormal
+                                ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade400)
+                                : (isDark ? const Color(0xFF6EE7B7) : Colors.green.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ],
       ),

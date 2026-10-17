@@ -5,9 +5,11 @@ import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../providers/records_provider.dart';
+import '../providers/settings_provider.dart';
 import '../models/record.dart';
 import '../models/check_item.dart';
 import '../models/medication.dart';
+import '../services/image_storage_service.dart';
 
 class RecordEditScreen extends StatefulWidget {
   final CheckRecord? record;
@@ -195,6 +197,7 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
                   itemCount: _images.length,
                   itemBuilder: (context, index) {
                     final path = _images[index];
+                    final file = ImageStorageService.instance.resolveImageFileSync(path);
                     return Stack(
                       children: [
                         Container(
@@ -203,8 +206,16 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
                           height: 80,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(8),
-                            image: DecorationImage(image: FileImage(File(path)), fit: BoxFit.cover),
+                            color: Colors.grey.shade300,
+                            image: file.existsSync()
+                                ? DecorationImage(image: FileImage(file), fit: BoxFit.cover)
+                                : null,
                           ),
+                          child: file.existsSync()
+                              ? null
+                              : const Center(
+                                  child: Icon(Icons.broken_image, size: 24, color: Colors.grey),
+                                ),
                         ),
                         Positioned(
                           right: 4,
@@ -383,9 +394,16 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
     final picker = ImagePicker();
     final picked = await picker.pickMultiImage();
     if (picked.isNotEmpty) {
-      setState(() {
-        _images.addAll(picked.map((e) => e.path));
-      });
+      final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+      for (var p in picked) {
+        final permPath = await ImageStorageService.instance.persistImage(
+          p.path,
+          customBackupPath: settings.customLocalImagesPath,
+        );
+        setState(() {
+          _images.add(permPath);
+        });
+      }
     }
   }
 
@@ -502,10 +520,20 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
     );
   }
 
-  void _saveRecord(RecordsProvider prov) {
+  void _saveRecord(RecordsProvider prov) async {
     if (_diseaseId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择关联的疾病')));
       return;
+    }
+
+    final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+    final List<String> permanentImages = [];
+    for (var img in _images) {
+      final pPath = await ImageStorageService.instance.persistImage(
+        img,
+        customBackupPath: settings.customLocalImagesPath,
+      );
+      permanentImages.add(pPath);
     }
 
     final record = CheckRecord(
@@ -518,13 +546,15 @@ class _RecordEditScreenState extends State<RecordEditScreen> {
       doctorName: _doctorCtrl.text.trim(),
       category: _categoryCtrl.text.trim(),
       doctorAdvice: _adviceCtrl.text.trim(),
-      imagePaths: _images,
+      imagePaths: permanentImages,
       items: _items,
       medicationChanges: _medications,
       overallNotes: _notesCtrl.text.trim(),
     );
 
-    prov.saveRecord(record);
-    Navigator.pop(context);
+    await prov.saveRecord(record);
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 }

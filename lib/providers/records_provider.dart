@@ -8,6 +8,7 @@ import '../models/medication_plan.dart';
 import '../models/consultation_question.dart';
 import '../models/medication_inventory.dart';
 import '../services/storage_service.dart';
+import '../services/image_storage_service.dart';
 
 class MetricHistoryPoint {
   final DateTime date;
@@ -172,6 +173,24 @@ class RecordsProvider with ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+
+    // 后台静默执行化验单原图自愈与永久化抢救迁移，确保图片永不丢失
+    _autoHealAndMigrateImages();
+  }
+
+  Future<void> _autoHealAndMigrateImages() async {
+    try {
+      final settings = await StorageService.instance.getSettings();
+      await ImageStorageService.instance.healAndMigrateAllRecords(
+        records: _records,
+        onSaveRecord: (updated) async {
+          await StorageService.instance.saveRecord(updated);
+        },
+        customBackupPath: settings.customLocalImagesPath,
+      );
+    } catch (e) {
+      debugPrint('自动自愈化验单图片路径异常: $e');
+    }
   }
 
   List<CheckRecord> getFilteredRecords({String sortOrder = 'date_desc'}) {

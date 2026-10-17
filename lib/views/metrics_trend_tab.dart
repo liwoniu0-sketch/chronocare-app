@@ -7,7 +7,9 @@ import '../providers/records_provider.dart';
 import 'record_detail_screen.dart';
 
 class MetricsTrendTab extends StatefulWidget {
-  const MetricsTrendTab({super.key});
+  final String? initialItemName;
+
+  const MetricsTrendTab({super.key, this.initialItemName});
 
   @override
   State<MetricsTrendTab> createState() => _MetricsTrendTabState();
@@ -17,6 +19,26 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
   String? _selectedItemName;
   final TextEditingController _searchCtrl = TextEditingController();
   String _searchKeyword = '';
+  bool _hasAppliedInitialItem = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialItemName != null && widget.initialItemName!.isNotEmpty) {
+      _selectedItemName = widget.initialItemName;
+      _hasAppliedInitialItem = true;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MetricsTrendTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialItemName != null && widget.initialItemName != oldWidget.initialItemName) {
+      setState(() {
+        _selectedItemName = widget.initialItemName;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -44,8 +66,19 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
       );
     }
 
+    final bool canPop = Navigator.canPop(context);
+
+    if (!_hasAppliedInitialItem && widget.initialItemName != null && widget.initialItemName!.isNotEmpty) {
+      _selectedItemName = widget.initialItemName;
+      _hasAppliedInitialItem = true;
+    }
+
     if (_selectedItemName == null || !allItems.contains(_selectedItemName)) {
-      _selectedItemName = filteredItems.isNotEmpty ? filteredItems.first : allItems.first;
+      if (widget.initialItemName != null && allItems.contains(widget.initialItemName)) {
+        _selectedItemName = widget.initialItemName;
+      } else {
+        _selectedItemName = filteredItems.isNotEmpty ? filteredItems.first : allItems.first;
+      }
     }
 
     final history = prov.getMetricHistory(_selectedItemName!);
@@ -71,6 +104,15 @@ class _MetricsTrendTabState extends State<MetricsTrendTab> {
     }
 
     return Scaffold(
+      appBar: canPop
+          ? AppBar(
+              title: Text(
+                _selectedItemName != null ? '$_selectedItemName 走势' : '指标走势',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              centerTitle: true,
+            )
+          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(14),
         child: Column(

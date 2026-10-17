@@ -220,27 +220,59 @@ class _TimelineTabState extends State<TimelineTab> {
                               children: [
                                 ...displayItems.map((item) {
                                   final isAbnormal = item.status != 'normal';
-                                  return Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: isAbnormal
-                                          ? (isDark ? const Color(0xFF881337).withOpacity(0.4) : Colors.red.shade50)
-                                          : (isDark ? const Color(0xFF1E3A5F).withOpacity(0.4) : Colors.blue.shade50.withOpacity(0.5)),
+                                  return Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
                                       borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: isAbnormal
-                                            ? (isDark ? const Color(0xFFF43F5E) : Colors.red.shade200)
-                                            : (isDark ? const Color(0xFF38BDF8) : Colors.blue.shade100),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      '${item.itemName}: ${item.value} ${item.unit} ${isAbnormal ? (item.status == "high" ? "↑" : (item.status == "low" ? "↓" : "异常")) : ""}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: isAbnormal
-                                            ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade700)
-                                            : (isDark ? const Color(0xFFBAE6FD) : Colors.black87),
-                                        fontWeight: isAbnormal ? FontWeight.w600 : FontWeight.normal,
+                                      onTap: () {
+                                        // 点击化验指标项目，直接指向其在档案里的具体位置并高亮聚焦
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => RecordDetailScreen(
+                                              recordId: record.id,
+                                              initialCategory: item.category.isNotEmpty ? item.category : null,
+                                              highlightItemName: item.itemName,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: isAbnormal
+                                              ? (isDark ? const Color(0xFF881337).withOpacity(0.4) : Colors.red.shade50)
+                                              : (isDark ? const Color(0xFF1E3A5F).withOpacity(0.4) : Colors.blue.shade50.withOpacity(0.5)),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(
+                                            color: isAbnormal
+                                                ? (isDark ? const Color(0xFFF43F5E) : Colors.red.shade200)
+                                                : (isDark ? const Color(0xFF38BDF8) : Colors.blue.shade100),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              '${item.itemName}: ${item.value} ${item.unit} ${isAbnormal ? (item.status == "high" ? "↑" : (item.status == "low" ? "↓" : "异常")) : ""}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: isAbnormal
+                                                    ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade700)
+                                                    : (isDark ? const Color(0xFFBAE6FD) : Colors.black87),
+                                                fontWeight: isAbnormal ? FontWeight.w600 : FontWeight.normal,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 3),
+                                            Icon(
+                                              Icons.open_in_new,
+                                              size: 11,
+                                              color: isAbnormal
+                                                  ? (isDark ? const Color(0xFFFDA4AF) : Colors.red.shade400)
+                                                  : (isDark ? const Color(0xFF38BDF8) : Colors.blue.shade600),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   );

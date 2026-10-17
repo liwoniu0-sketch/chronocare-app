@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import '../services/image_storage_service.dart';
 import 'package:flutter/services.dart';
 
 class PhotoGalleryViewer extends StatefulWidget {
@@ -94,7 +95,7 @@ class _PhotoGalleryViewerState extends State<PhotoGalleryViewer> with SingleTick
 
     final currentImgPath = widget.imagePaths[_currentIndex];
     final currentCatName = widget.imageCategoryMap?[currentImgPath] ?? '';
-    final currentImgFile = File(currentImgPath);
+    final currentImgFile = ImageStorageService.instance.resolveImageFileSync(currentImgPath);
 
     return Scaffold(
       backgroundColor: Colors.black,

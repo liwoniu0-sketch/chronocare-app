@@ -10,6 +10,7 @@ import '../models/check_item.dart';
 import '../models/medication.dart';
 import '../services/ocr_service.dart';
 import '../services/ai_service.dart';
+import '../services/image_storage_service.dart';
 import 'record_edit_screen.dart';
 
 enum BatchTaskStatus { pending, ocring, aiParsing, completed, failed }
@@ -239,15 +240,20 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     final picker = ImagePicker();
     final picked = await picker.pickMultiImage();
     if (picked.isNotEmpty) {
-      setState(() {
-        for (var p in picked) {
+      final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+      // 永久化核心防线：选图后立即将图片从系统临时缓存目录无损拷贝到 App 专有永久存储目录，彻底根治隔段时间图片丢失 Bug
+      for (var p in picked) {
+        final permanentPath = await ImageStorageService.instance.persistImage(
+          p.path,
+          customBackupPath: settings.customLocalImagesPath,
+        );
+        setState(() {
           _tasks.add(BatchTaskItem(
             id: const Uuid().v4(),
-            file: File(p.path),
+            file: File(permanentPath),
           ));
-        }
-      });
-      final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
+        });
+      }
       if (settings.batchAutoOcr) {
         _runBatchPipeline(settings);
       }
@@ -315,8 +321,19 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
     task.status = BatchTaskStatus.completed;
   }
 
-  void _openTaskEdit(BatchTaskItem task, RecordsProvider recordsProv) {
+  void _openTaskEdit(BatchTaskItem task, RecordsProvider recordsProv) async {
+    final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
     final res = task.result;
+    final permanentPath = await ImageStorageService.instance.persistImage(
+      task.file.path,
+      customBackupPath: settings.customLocalImagesPath,
+    );
+    final items = res?.items ?? [];
+    for (var item in items) {
+      if (item.sourceImagePath.isEmpty || item.sourceImagePath == task.file.path) {
+        item.sourceImagePath = permanentPath;
+      }
+    }
     final rec = CheckRecord(
       id: const Uuid().v4(),
       diseaseId: recordsProv.diseases.isNotEmpty ? recordsProv.diseases.first.id : '',
@@ -326,22 +343,35 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
       doctorName: res?.doctorName ?? '',
       category: res?.category ?? '血液生化',
       doctorAdvice: res?.doctorAdvice ?? '',
-      imagePaths: [task.file.path],
-      items: res?.items ?? [],
+      imagePaths: [permanentPath],
+      items: items,
       medicationChanges: res?.medicationChanges ?? [],
     );
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => RecordEditScreen(record: rec)),
-    );
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => RecordEditScreen(record: rec)),
+      );
+    }
   }
 
   void _saveAllCompletedTasks(RecordsProvider recordsProv) async {
+    final settings = Provider.of<SettingsProvider>(context, listen: false).settings;
     int processedCount = 0;
     for (var task in _tasks) {
       if (task.status == BatchTaskStatus.completed && task.result != null) {
         final res = task.result!;
+        // 永久存储路径双重保险
+        final permanentPath = await ImageStorageService.instance.persistImage(
+          task.file.path,
+          customBackupPath: settings.customLocalImagesPath,
+        );
+        for (var item in res.items) {
+          if (item.sourceImagePath.isEmpty || item.sourceImagePath == task.file.path) {
+            item.sourceImagePath = permanentPath;
+          }
+        }
         final rec = CheckRecord(
           id: const Uuid().v4(),
           diseaseId: recordsProv.diseases.isNotEmpty ? recordsProv.diseases.first.id : '',
@@ -351,7 +381,7 @@ class _BatchImportScreenState extends State<BatchImportScreen> {
           doctorName: res.doctorName,
           category: res.category.isNotEmpty ? res.category : '常规化验',
           doctorAdvice: res.doctorAdvice,
-          imagePaths: [task.file.path], // 每张图片独立绑定当前化验单
+          imagePaths: [permanentPath], // 永久化绝对存储路径
           items: res.items,
           medicationChanges: res.medicationChanges,
         );
