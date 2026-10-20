@@ -2,7 +2,7 @@
 
 > 专为慢性病病程管理与复查追踪打造的**高自定义度、本地隐私优先、AI 赋能**移动端软件。
 
-[![Build & Release Android APK](https://github.com/liwo1861a-hub/chronocare-app/actions/workflows/build-release.yml/badge.svg)](https://github.com/liwo1861a-hub/chronocare-app/actions/workflows/build-release.yml)
+[![Build & Release Android APK](https://github.com/liwoniu0-sketch/chronocare-app/actions/workflows/build-release.yml/badge.svg)](https://github.com/liwoniu0-sketch/chronocare-app/actions/workflows/build-release.yml)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](assets/version.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 

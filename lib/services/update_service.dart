@@ -28,7 +28,7 @@ class UpdateService {
   static const String currentVersion = '1.3.1';
   static const int currentBuildNumber = 32;
 
-  static const String repoOwner = 'liwo1861a-hub';
+  static const String repoOwner = 'liwoniu0-sketch';
   static const String repoName = 'chronocare-app';
 
   /// 检查 GitHub Releases 最新版本
